@@ -140,6 +140,9 @@ class AgentHarnessService:
             tool_schema_version=tool_registry.schema_version or "",
             model_provider=settings.model_provider,
             context_manager=context_manager,
+            core_version_snapshots=(
+                memory_runtime.core_version_snapshots if memory_runtime is not None else None
+            ),
         )
         graph = SkeletonAgentGraph(
             model_gateway=resolved_model_gateway,

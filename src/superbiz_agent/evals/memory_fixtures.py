@@ -10,6 +10,7 @@ from superbiz_agent.memory.schemas import (
     LongTermMemory,
     MemoryStatus,
     MemoryType,
+    utc_now,
 )
 from superbiz_agent.memory.store import content_hash
 
@@ -51,22 +52,27 @@ class MemoryFixtureSeeder:
     def __init__(self, memory_runtime: MemoryRuntimeComponents) -> None:
         self.memory_runtime = memory_runtime
 
-    def initialize_default_core_blocks(
+    async def initialize_default_core_blocks(
         self,
         tenant_id: str,
         user_id: str,
         agent_id: str,
     ) -> None:
-        store = self.memory_runtime.store
+        admin = self.memory_runtime.fixture_admin
+        if admin is None:
+            raise RuntimeError("memory fixtures are only available for the memory backend")
         existing = {
             block.block_key
-            for block in store.list_core_blocks_for_scope(tenant_id, user_id, agent_id)
+            for block in await self.memory_runtime.inspection_repository.list_core_blocks_for_scope(
+                tenant_id,
+                user_id,
+                agent_id,
+            )
         }
-        for block_key in DEFAULT_CORE_BLOCK_KEYS:
-            if block_key not in existing:
-                store.initialize_core_block(tenant_id, user_id, agent_id, block_key)
+        if any(block_key not in existing for block_key in DEFAULT_CORE_BLOCK_KEYS):
+            await admin.ensure_default_core_blocks(tenant_id, user_id, agent_id)
 
-    def seed(
+    async def seed(
         self,
         tenant_id: str,
         user_id: str,
@@ -75,19 +81,27 @@ class MemoryFixtureSeeder:
         core_blocks: Mapping[str, str | CoreMemoryFixture] | None = None,
         archival_memories: Sequence[ArchivalMemoryFixture] = (),
     ) -> SeededMemoryFixtures:
-        self.initialize_default_core_blocks(tenant_id, user_id, agent_id)
-        store = self.memory_runtime.store
+        await self.initialize_default_core_blocks(tenant_id, user_id, agent_id)
+        admin = self.memory_runtime.fixture_admin
+        if admin is None:
+            raise RuntimeError("memory fixtures are only available for the memory backend")
 
         for block_key, fixture in (core_blocks or {}).items():
             if block_key not in CORE_BLOCK_SPECS:
                 raise ValueError(f"Unknown core memory block: {block_key}")
             current = next(
                 block
-                for block in store.list_core_blocks_for_scope(tenant_id, user_id, agent_id)
+                for block in await (
+                    self.memory_runtime.inspection_repository.list_core_blocks_for_scope(
+                        tenant_id,
+                        user_id,
+                        agent_id,
+                    )
+                )
                 if block.block_key == block_key
             )
             if isinstance(fixture, CoreMemoryFixture):
-                store.upsert_core_block(
+                await admin.upsert_core_block(
                     replace(
                         current,
                         content=fixture.content,
@@ -99,15 +113,15 @@ class MemoryFixtureSeeder:
             if not isinstance(fixture, str):
                 raise TypeError("Core memory fixtures must be strings or CoreMemoryFixture")
             if current.content_hash != content_hash(fixture):
-                updated = store.update_core_content(
-                    tenant_id,
-                    user_id,
-                    agent_id,
-                    block_key,
-                    fixture,
+                await admin.upsert_core_block(
+                    replace(
+                        current,
+                        content=fixture,
+                        content_hash=content_hash(fixture),
+                        version=current.version + 1,
+                        updated_at=utc_now(),
+                    )
                 )
-                if updated is None:
-                    raise RuntimeError(f"Failed to seed core memory block: {block_key}")
 
         fixture_memory_ids: dict[str, str] = {}
         for fixture in archival_memories:
@@ -134,7 +148,7 @@ class MemoryFixtureSeeder:
                 scope_service=fixture.scope_service,
                 scope_env=fixture.scope_env,
             )
-            store.insert_memory(memory)
+            await admin.insert_memory(memory)
             fixture_memory_ids[fixture.fixture_id] = memory.id
 
         return SeededMemoryFixtures(fixture_memory_ids=dict(fixture_memory_ids))

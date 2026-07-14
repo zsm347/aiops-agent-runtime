@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from superbiz_agent.config import Settings
@@ -37,15 +39,17 @@ def _runtime():
 @pytest.mark.asyncio
 async def test_snapshot_is_read_only_and_does_not_lazy_initialize_core_blocks() -> None:
     trace_store, runtime = _runtime()
-    provider = MemorySnapshotProvider(runtime.store)
+    provider = MemorySnapshotProvider(runtime.inspection_repository)
 
-    first = provider.capture("tenant", "user", "agent")
-    second = provider.capture("tenant", "user", "agent")
+    first = await provider.capture("tenant", "user", "agent")
+    second = await provider.capture("tenant", "user", "agent")
 
     assert first == second
     assert first.core_blocks == ()
     assert first.archival_memories == ()
-    assert runtime.store.list_core_blocks_for_scope("tenant", "user", "agent") == []
+    assert await runtime.inspection_repository.list_core_blocks_for_scope(
+        "tenant", "user", "agent"
+    ) == []
     assert await trace_store.list_by_session(
         AgentRequestContext("tenant", "user", "agent", "snapshot")
     ) == []
@@ -55,9 +59,9 @@ async def test_snapshot_is_read_only_and_does_not_lazy_initialize_core_blocks() 
 async def test_fixture_initialization_precedes_snapshot_and_is_not_an_agent_write() -> None:
     trace_store, runtime = _runtime()
     seeder = MemoryFixtureSeeder(runtime)
-    provider = MemorySnapshotProvider(runtime.store)
+    provider = MemorySnapshotProvider(runtime.inspection_repository)
 
-    seeded = seeder.seed(
+    seeded = await seeder.seed(
         "tenant",
         "user",
         "agent",
@@ -73,7 +77,7 @@ async def test_fixture_initialization_precedes_snapshot_and_is_not_an_agent_writ
             )
         ],
     )
-    before = provider.capture("tenant", "user", "agent")
+    before = await provider.capture("tenant", "user", "agent")
 
     assert [block.block_key for block in before.core_blocks] == [
         "user_rules",
@@ -120,8 +124,8 @@ async def test_explicit_core_fixture_version_establishes_expected_version_delta(
 ) -> None:
     trace_store, runtime = _runtime()
     seeder = MemoryFixtureSeeder(runtime)
-    provider = MemorySnapshotProvider(runtime.store)
-    seeder.seed(
+    provider = MemorySnapshotProvider(runtime.inspection_repository)
+    await seeder.seed(
         "tenant",
         "user",
         "agent",
@@ -129,7 +133,7 @@ async def test_explicit_core_fixture_version_establishes_expected_version_delta(
             block_key: CoreMemoryFixture(content=initial_content, version=initial_version)
         },
     )
-    before = provider.capture("tenant", "user", "agent")
+    before = await provider.capture("tenant", "user", "agent")
     before_block = next(block for block in before.core_blocks if block.block_key == block_key)
     service = AgentHarnessService.build_default(
         _settings(),
@@ -147,6 +151,7 @@ async def test_explicit_core_fixture_version_establishes_expected_version_delta(
             auth_mode="dev_headers",
         )
     )
+    await service.runtime.assemble_context(run_context, "更新 Core Memory")
     result = await service.graph.tool_gateway.execute(
         run_context,
         ModelToolCall(
@@ -155,7 +160,7 @@ async def test_explicit_core_fixture_version_establishes_expected_version_delta(
             arguments={"blockKey": block_key, "newContent": next_content},
         ),
     )
-    after = provider.capture("tenant", "user", "agent")
+    after = await provider.capture("tenant", "user", "agent")
     after_block = next(block for block in after.core_blocks if block.block_key == block_key)
 
     assert before_block.version == initial_version
@@ -182,6 +187,7 @@ async def test_same_identity_shares_memory_across_sessions() -> None:
             auth_mode="dev_headers",
         )
     )
+    await service.runtime.assemble_context(first_run, "保存长期规则")
     result = await service.graph.tool_gateway.execute(
         first_run,
         ModelToolCall(
@@ -202,10 +208,107 @@ async def test_same_identity_shares_memory_across_sessions() -> None:
     assert any("所有回答先给证据。" in message.content for message in assembled.messages)
 
 
-def test_snapshots_are_isolated_by_tenant_user_and_agent() -> None:
+@pytest.mark.asyncio
+async def test_core_update_requires_snapshot_advances_version_and_cleans_up() -> None:
+    trace_store, runtime = _runtime()
+    service = AgentHarnessService.build_default(
+        _settings(),
+        model_gateway=StubModelGateway(),
+        trace_store=trace_store,
+        memory_runtime=runtime,
+    )
+    run_context = await service.runtime.start_run(
+        AgentRequestContext(
+            "tenant",
+            "user",
+            "agent",
+            "snapshot-required",
+            permissions=LOCAL_DEFAULT_PERMISSIONS,
+            auth_mode="dev_headers",
+        )
+    )
+    def call(call_id: str, content: str) -> ModelToolCall:
+        return ModelToolCall(
+            id=call_id,
+            name="updateCoreMemory",
+            arguments={"blockKey": "user_rules", "newContent": content},
+        )
+
+    missing = await service.graph.tool_gateway.execute(
+        run_context,
+        call("missing", "先给证据。"),
+    )
+    await service.runtime.assemble_context(run_context, "更新长期规则")
+    first = await service.graph.tool_gateway.execute(
+        run_context,
+        call("first", "先给证据。"),
+    )
+    second = await service.graph.tool_gateway.execute(
+        run_context,
+        call("second", "先给证据，再给结论。"),
+    )
+
+    assert missing.result["error_type"] == "update_context_missing"
+    assert first.result["version"] == 2
+    assert second.result["version"] == 3
+    assert runtime.core_version_snapshots.contains(run_context.run_id)
+    await service.runtime.complete_run(run_context, "done")
+    service.runtime.cleanup_run(run_context.run_id)
+    assert not runtime.core_version_snapshots.contains(run_context.run_id)
+
+
+@pytest.mark.asyncio
+async def test_core_snapshot_capture_once_rejects_concurrent_replacement() -> None:
+    trace_store, runtime = _runtime()
+    service = AgentHarnessService.build_default(
+        _settings(),
+        model_gateway=StubModelGateway(),
+        trace_store=trace_store,
+        memory_runtime=runtime,
+    )
+    run_context = await service.runtime.start_run(
+        AgentRequestContext(
+            "tenant",
+            "user",
+            "agent",
+            "capture-once",
+            permissions=LOCAL_DEFAULT_PERMISSIONS,
+            auth_mode="dev_headers",
+        )
+    )
+    await service.runtime.assemble_context(run_context, "读取 Core Memory")
+    admin = runtime.fixture_admin
+    assert admin is not None
+    current = next(
+        block
+        for block in await runtime.inspection_repository.list_core_blocks_for_scope(
+            "tenant", "user", "agent"
+        )
+        if block.block_key == "user_rules"
+    )
+    await admin.upsert_core_block(
+        replace(current, content="并发更新", content_hash="external", version=current.version + 1)
+    )
+    await service.runtime.assemble_context(run_context, "再次组装上下文")
+
+    conflict = await service.graph.tool_gateway.execute(
+        run_context,
+        ModelToolCall(
+            id="conflict",
+            name="updateCoreMemory",
+            arguments={"blockKey": "user_rules", "newContent": "当前 run 的更新"},
+        ),
+    )
+
+    assert conflict.result["success"] is False
+    assert conflict.result["error_type"] == "update_conflict"
+
+
+@pytest.mark.asyncio
+async def test_snapshots_are_isolated_by_tenant_user_and_agent() -> None:
     _trace_store, runtime = _runtime()
     seeder = MemoryFixtureSeeder(runtime)
-    provider = MemorySnapshotProvider(runtime.store)
+    provider = MemorySnapshotProvider(runtime.inspection_repository)
     identities = [
         ("tenant-a", "user-a", "agent-a", "tenant-canary"),
         ("tenant-b", "user-a", "agent-a", "other-tenant-canary"),
@@ -213,7 +316,7 @@ def test_snapshots_are_isolated_by_tenant_user_and_agent() -> None:
         ("tenant-a", "user-a", "agent-b", "other-agent-canary"),
     ]
     for tenant_id, user_id, agent_id, canary in identities:
-        seeder.seed(
+        await seeder.seed(
             tenant_id,
             user_id,
             agent_id,
@@ -227,7 +330,7 @@ def test_snapshots_are_isolated_by_tenant_user_and_agent() -> None:
             ],
         )
 
-    primary = provider.capture("tenant-a", "user-a", "agent-a")
+    primary = await provider.capture("tenant-a", "user-a", "agent-a")
     serialized = repr(primary)
 
     assert "tenant-canary" in serialized
@@ -236,10 +339,11 @@ def test_snapshots_are_isolated_by_tenant_user_and_agent() -> None:
     assert "other-agent-canary" not in serialized
 
 
-def test_each_case_and_repetition_gets_a_fresh_memory_runtime() -> None:
+@pytest.mark.asyncio
+async def test_each_case_and_repetition_gets_a_fresh_memory_runtime() -> None:
     trace_a, runtime_a = _runtime()
     trace_b, runtime_b = _runtime()
-    MemoryFixtureSeeder(runtime_a).seed(
+    await MemoryFixtureSeeder(runtime_a).seed(
         "tenant",
         "user",
         "agent",
@@ -247,13 +351,15 @@ def test_each_case_and_repetition_gets_a_fresh_memory_runtime() -> None:
     )
 
     assert trace_a is not trace_b
-    assert runtime_a.store is not runtime_b.store
+    assert runtime_a.repository is not runtime_b.repository
     assert "case-a-only" in repr(
-        MemorySnapshotProvider(runtime_a.store).capture("tenant", "user", "agent")
+        await MemorySnapshotProvider(runtime_a.inspection_repository).capture(
+            "tenant", "user", "agent"
+        )
     )
-    assert MemorySnapshotProvider(runtime_b.store).capture(
+    assert (await MemorySnapshotProvider(runtime_b.inspection_repository).capture(
         "tenant", "user", "agent"
-    ).core_blocks == ()
+    )).core_blocks == ()
 
 
 def test_build_default_supports_injection_and_preserves_default_path() -> None:
@@ -276,7 +382,7 @@ def test_build_default_supports_injection_and_preserves_default_path() -> None:
         memory_runtime.context_provider
     )
     assert default.memory_runtime is not None
-    assert default.memory_runtime.store is not memory_runtime.store
+    assert default.memory_runtime.repository is not memory_runtime.repository
     assert {tool.name for tool in default.graph.tool_gateway.registry.list()} >= {
         "updateCoreMemory",
         "saveArchivalMemory",

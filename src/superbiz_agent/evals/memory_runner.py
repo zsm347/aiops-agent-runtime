@@ -347,15 +347,30 @@ class MemoryEvalRunner:
         gateway = self._gateway_for(case, repetition, config.mode)
         capturing_gateway = CapturingModelGateway(gateway)
         service = self.service_factory(self.settings, capturing_gateway)
+        try:
+            return await self._execute_case(case, repetition, service, capturing_gateway)
+        finally:
+            await service.aclose()
+
+    async def _execute_case(
+        self,
+        case: MemoryEvalCase,
+        repetition: int,
+        service: AgentHarnessService,
+        capturing_gateway: CapturingModelGateway,
+    ) -> MemoryEvalCaseResult:
         if service.memory_runtime is None:
             raise RuntimeError("memory evaluation requires an enabled memory runtime")
         seeder = MemoryFixtureSeeder(service.memory_runtime)
-        snapshots = MemorySnapshotProvider(service.memory_runtime.store)
-        fixture_ids = self._seed_case(case, seeder)
-        before = {
-            key: snapshots.capture(identity.tenant_id, identity.user_id, identity.agent_id)
-            for key, identity in case.identities.items()
-        }
+        snapshots = MemorySnapshotProvider(service.memory_runtime.inspection_repository)
+        fixture_ids = await self._seed_case(case, seeder)
+        before = {}
+        for key, identity in case.identities.items():
+            before[key] = await snapshots.capture(
+                identity.tenant_id,
+                identity.user_id,
+                identity.agent_id,
+            )
         artifact = MemoryEvalArtifact(
             case_id=case.case_id,
             repetition=repetition,
@@ -404,10 +419,13 @@ class MemoryEvalRunner:
             )
             for name, count in turn_artifact.token_usage.items():
                 all_usage[name] += count
-        artifact.after_snapshots = {
-            key: snapshots.capture(identity.tenant_id, identity.user_id, identity.agent_id)
-            for key, identity in case.identities.items()
-        }
+        artifact.after_snapshots = {}
+        for key, identity in case.identities.items():
+            artifact.after_snapshots[key] = await snapshots.capture(
+                identity.tenant_id,
+                identity.user_id,
+                identity.agent_id,
+            )
         artifact.total_latency_ms = int((perf_counter() - case_started) * 1000)
         artifact.token_usage = dict(all_usage)
         artifact.tool_schema_hash = _tool_schema_hash(artifact)
@@ -454,7 +472,10 @@ class MemoryEvalRunner:
         return build_model_gateway(self.settings)
 
     @staticmethod
-    def _seed_case(case: MemoryEvalCase, seeder: MemoryFixtureSeeder) -> dict[str, str]:
+    async def _seed_case(
+        case: MemoryEvalCase,
+        seeder: MemoryFixtureSeeder,
+    ) -> dict[str, str]:
         core_by_identity: dict[str, dict[str, CoreMemoryFixture]] = defaultdict(dict)
         for block in case.initial_memory.core_blocks:
             core_by_identity[block.identity][block.block_key] = _core_fixture(block)
@@ -463,7 +484,7 @@ class MemoryEvalRunner:
             archival_by_identity[memory.identity].append(_archival_fixture(memory))
         fixture_ids: dict[str, str] = {}
         for key, identity in case.identities.items():
-            seeded = seeder.seed(
+            seeded = await seeder.seed(
                 identity.tenant_id,
                 identity.user_id,
                 identity.agent_id,

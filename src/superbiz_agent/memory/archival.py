@@ -6,8 +6,8 @@ from typing import Literal
 from superbiz_agent.harness.context import RunContext
 from superbiz_agent.memory.embedding import DeterministicEmbeddingService
 from superbiz_agent.memory.policy import MemoryWritePolicy, PolicyDecision
+from superbiz_agent.memory.ports import MemoryRepository
 from superbiz_agent.memory.schemas import LongTermMemory
-from superbiz_agent.memory.store import InMemoryMemoryStore
 
 
 @dataclass(frozen=True)
@@ -63,15 +63,15 @@ class WriteMemoryResult:
 class ArchivalMemoryService:
     def __init__(
         self,
-        store: InMemoryMemoryStore,
+        repository: MemoryRepository,
         policy: MemoryWritePolicy,
         embedding_service: DeterministicEmbeddingService,
     ) -> None:
-        self.store = store
+        self.repository = repository
         self.policy = policy
         self.embedding_service = embedding_service
 
-    def save_archival_memory(
+    async def save_archival_memory(
         self,
         run_context: RunContext,
         *,
@@ -87,6 +87,9 @@ class ArchivalMemoryService:
             topic,
             content,
             evidence_summary,
+            scope_service=scope_service,
+            scope_env=scope_env,
+            tags=tags,
         )
         if not validation.allowed:
             return WriteMemoryResult.rejected(validation.decision)
@@ -111,7 +114,7 @@ class ArchivalMemoryService:
             scope_service=_blank_to_none(scope_service),
             scope_env=_blank_to_none(scope_env),
         )
-        write_result = self.store.write_archival_exact(memory)
+        write_result = await self.repository.write_archival_exact(memory)
         if write_result.status == "written":
             return WriteMemoryResult.written(write_result.memory.id)
         return WriteMemoryResult.duplicate_skipped(

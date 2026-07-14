@@ -1,36 +1,69 @@
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import dataclass
+from xml.sax.saxutils import escape
+
+from superbiz_agent.harness.context import RunContext
 from superbiz_agent.memory.policy import estimate_tokens
+from superbiz_agent.memory.ports import MemoryRepository
+from superbiz_agent.memory.run_snapshots import CoreVersionSnapshotRegistry
 from superbiz_agent.memory.schemas import MemoryContext
 from superbiz_agent.memory.search import MemorySearchService
-from superbiz_agent.memory.store import InMemoryMemoryStore
+
+
+@dataclass(frozen=True)
+class MemoryIndexBuild:
+    xml: str
+    topic_count: int
 
 
 class MemoryIndexService:
     def __init__(
         self,
-        store: InMemoryMemoryStore,
+        repository: MemoryRepository,
         search_service: MemorySearchService,
         *,
         max_tokens: int = 600,
         topic_max_items_per_type: int = 5,
     ) -> None:
-        self.store = store
+        self.repository = repository
         self.search_service = search_service
         self.max_tokens = max_tokens
         self.topic_max_items_per_type = topic_max_items_per_type
 
-    def build_index(self, tenant_id: str, user_id: str, agent_id: str) -> str:
-        memories = self.store.active_memories(
+    async def build_index(self, tenant_id: str, user_id: str, agent_id: str) -> str:
+        return (await self.build_index_with_count(tenant_id, user_id, agent_id)).xml
+
+    async def build_index_with_count(
+        self,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+    ) -> MemoryIndexBuild:
+        memories = await self.repository.list_active_memories(
             tenant_id,
             user_id,
             agent_id,
             types=["experience", "knowledge"],
         )
         archival_total = len(memories)
-        top_topics = self.search_service.list_memory_topics(tenant_id, user_id, agent_id, "all")
-        tags = self.store.all_tags(tenant_id, user_id, agent_id, 10)
-        services, envs = self.store.all_scopes(tenant_id, user_id, agent_id, 10)
+        top_topics = []
+        for memory_type in ("experience", "knowledge"):
+            counts = Counter(memory.topic for memory in memories if memory.type == memory_type)
+            top_topics.extend(
+                (memory_type, topic, count)
+                for topic, count in counts.most_common(self.search_service.topics_per_type)
+            )
+        top_topics = top_topics[: self.search_service.topics_max]
+        tag_counts = Counter(tag for memory in memories for tag in memory.tags)
+        tags = [tag for tag, _count in tag_counts.most_common(10)]
+        service_counts = Counter(
+            memory.scope_service for memory in memories if memory.scope_service
+        )
+        env_counts = Counter(memory.scope_env for memory in memories if memory.scope_env)
+        services = [service for service, _count in service_counts.most_common(10)]
+        envs = [env for env, _count in env_counts.most_common(10)]
         lines = [
             "<memory_metadata>",
             f"- archival_memory_total: {archival_total}",
@@ -40,17 +73,20 @@ class MemoryIndexService:
             for memory_type in ("experience", "knowledge"):
                 lines.append(f"  {memory_type}:")
                 rendered = 0
-                for topic in top_topics:
-                    if topic.type != memory_type or rendered >= self.topic_max_items_per_type:
+                for topic_type, topic, count in top_topics:
+                    if topic_type != memory_type or rendered >= self.topic_max_items_per_type:
                         continue
-                    lines.append(f"  - {topic.topic} ({topic.count})")
+                    lines.append(f"  - {escape(topic)} ({count})")
                     rendered += 1
         else:
             lines.append("  none")
-        lines.append(f"- available_tags: {', '.join(tags) if tags else 'none'}")
+        rendered_tags = ", ".join(escape(tag) for tag in tags) if tags else "none"
+        lines.append(f"- available_tags: {rendered_tags}")
         lines.append("- available_scopes:")
-        lines.append(f"  services: {', '.join(services) if services else 'none'}")
-        lines.append(f"  envs: {', '.join(envs) if envs else 'none'}")
+        rendered_services = ", ".join(escape(service) for service in services) if services else "none"
+        rendered_envs = ", ".join(escape(env) for env in envs) if envs else "none"
+        lines.append(f"  services: {rendered_services}")
+        lines.append(f"  envs: {rendered_envs}")
         lines.extend(
             [
                 "- usage_rules:",
@@ -64,11 +100,11 @@ class MemoryIndexService:
         )
         rendered = "\n".join(lines)
         if self.max_tokens > 0 and estimate_tokens(rendered) > self.max_tokens:
-            return self._fallback_within_budget()
-        return rendered
+            rendered = self._fallback_within_budget()
+        return MemoryIndexBuild(xml=rendered, topic_count=len(top_topics))
 
-    def count_index_topics(self, tenant_id: str, user_id: str, agent_id: str) -> int:
-        return len(self.search_service.list_memory_topics(tenant_id, user_id, agent_id, "all"))
+    async def count_index_topics(self, tenant_id: str, user_id: str, agent_id: str) -> int:
+        return (await self.build_index_with_count(tenant_id, user_id, agent_id)).topic_count
 
     def _fallback_within_budget(self) -> str:
         fallbacks = [
@@ -86,18 +122,29 @@ class MemoryIndexService:
 
 
 class MemoryContextProvider:
-    def __init__(self, core_service, index_service: MemoryIndexService) -> None:
+    def __init__(
+        self,
+        core_service,
+        index_service: MemoryIndexService,
+        snapshots: CoreVersionSnapshotRegistry,
+    ) -> None:
         self.core_service = core_service
         self.index_service = index_service
+        self.snapshots = snapshots
 
-    def build_context(self, tenant_id: str, user_id: str, agent_id: str) -> MemoryContext:
-        core_xml = self.core_service.build_context_block(tenant_id, user_id, agent_id)
-        index_xml = self.index_service.build_index(tenant_id, user_id, agent_id)
-        core_block_count = len(self.core_service.load_blocks(tenant_id, user_id, agent_id))
-        topic_count = self.index_service.count_index_topics(tenant_id, user_id, agent_id)
-        return MemoryContext(
+    async def build_context(self, run_context: RunContext) -> MemoryContext:
+        request_context = run_context.request_context
+        tenant_id = request_context.tenant_id or ""
+        user_id = request_context.user_id or ""
+        agent_id = request_context.agent_id or ""
+        blocks = await self.core_service.load_blocks(tenant_id, user_id, agent_id)
+        core_xml = self.core_service.build_context_block(blocks)
+        index = await self.index_service.build_index_with_count(tenant_id, user_id, agent_id)
+        context = MemoryContext(
             core_memory_xml=core_xml,
-            memory_index_xml=index_xml,
-            core_block_count=core_block_count,
-            memory_index_topic_count=topic_count,
+            memory_index_xml=index.xml,
+            core_block_count=len(blocks),
+            memory_index_topic_count=index.topic_count,
         )
+        self.snapshots.capture_once(run_context, blocks)
+        return context

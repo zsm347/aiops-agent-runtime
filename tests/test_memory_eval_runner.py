@@ -745,7 +745,7 @@ async def test_each_repetition_builds_a_new_service_and_memory_runtime(tmp_path:
     def isolated_factory(settings: Settings, gateway):
         trace_store = InMemoryRolloutEventStore()
         runtime = build_memory_runtime(settings, trace_store=trace_store)
-        stores.append(runtime.store)
+        stores.append(runtime.repository)
         return AgentHarnessService.build_default(
             settings,
             model_gateway=gateway,

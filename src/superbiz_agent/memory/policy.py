@@ -123,6 +123,10 @@ class MemoryWritePolicy:
         topic: str | None,
         content: str | None,
         evidence_summary: str | None = None,
+        *,
+        scope_service: str | None = None,
+        scope_env: str | None = None,
+        tags: list[str] | None = None,
     ) -> ArchivalValidation:
         context_decision = self._validate_context(run_context)
         if not context_decision.allowed:
@@ -159,7 +163,7 @@ class MemoryWritePolicy:
                     "Summarize the memory; do not paste raw logs or tool output.",
                 )
             )
-        for text in (topic, content, evidence_summary):
+        for text in (topic, content, evidence_summary, scope_service, scope_env, *(tags or [])):
             sensitive = reject_if_sensitive(text)
             if not sensitive.allowed:
                 return ArchivalValidation(sensitive)

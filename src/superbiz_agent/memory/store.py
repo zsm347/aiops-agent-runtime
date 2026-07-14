@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from superbiz_agent.memory.dedup import canonical_content_hash
+from superbiz_agent.memory.errors import CoreMemoryContractError
 from superbiz_agent.memory.schemas import (
     CORE_BLOCK_SPECS,
     DEFAULT_CORE_BLOCK_KEYS,
@@ -52,6 +53,36 @@ class InMemoryMemoryStore:
                 ) is not None
                 and block.status == "active"
             ]
+
+    def ensure_default_core_blocks(
+        self,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+    ) -> list[CoreMemoryBlock]:
+        """Atomically initialize and return the three active default blocks."""
+
+        with self._lock:
+            blocks: list[CoreMemoryBlock] = []
+            for block_key in DEFAULT_CORE_BLOCK_KEYS:
+                key = (tenant_id, user_id, agent_id, block_key)
+                block = self._core_blocks.get(key)
+                if block is not None and block.status != "active":
+                    raise CoreMemoryContractError()
+                if block is None:
+                    spec = CORE_BLOCK_SPECS[block_key]
+                    block = CoreMemoryBlock(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        agent_id=agent_id,
+                        block_key=block_key,
+                        description=spec.description,
+                        max_tokens=spec.max_tokens,
+                        content_hash=content_hash(""),
+                    )
+                    self._core_blocks[key] = block
+                blocks.append(block)
+            return blocks
 
     def list_core_blocks_for_scope(
         self,
@@ -121,6 +152,41 @@ class InMemoryMemoryStore:
             )
             self._core_blocks[key] = updated
             return updated
+
+    def cas_replace_core_content(
+        self,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+        block_key: str,
+        content: str,
+        *,
+        expected_version: int,
+    ) -> tuple[
+        Literal["updated", "unchanged", "conflict", "inactive", "read_only"],
+        CoreMemoryBlock | None,
+    ]:
+        with self._lock:
+            key = (tenant_id, user_id, agent_id, block_key)
+            current = self._core_blocks.get(key)
+            if current is None or current.status != "active":
+                return "inactive", current
+            if current.read_only:
+                return "read_only", current
+            target_hash = content_hash(content)
+            if current.content_hash == target_hash:
+                return "unchanged", current
+            if current.version != expected_version:
+                return "conflict", current
+            updated = replace(
+                current,
+                content=content,
+                content_hash=target_hash,
+                version=current.version + 1,
+                updated_at=utc_now(),
+            )
+            self._core_blocks[key] = updated
+            return "updated", updated
 
     def insert_memory(self, memory: LongTermMemory) -> LongTermMemory:
         with self._lock:

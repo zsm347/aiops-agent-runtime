@@ -127,10 +127,11 @@ def test_default_prompt_and_tool_schema_versions_are_current_versions() -> None:
     assert settings.tool_schema_version == "ops-tools-v3"
 
 
-def test_context_assembler_orders_system_history_user_and_payload() -> None:
+@pytest.mark.asyncio
+async def test_context_assembler_orders_system_history_user_and_payload() -> None:
     registry = PromptRegistry(Path(__file__).resolve().parents[1] / "prompts")
     assembler = ContextAssembler(registry)
-    assembled = assembler.assemble(
+    assembled = await assembler.assemble(
         prompt_version="ops-agent-system-v2",
         active_history=[ModelMessage(role="assistant", content="历史回答")],
         current_user_message="当前问题",

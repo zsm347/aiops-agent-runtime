@@ -8,6 +8,7 @@ from superbiz_agent.harness.context_manager import ContextManager
 from superbiz_agent.harness.events import RolloutEventType
 from superbiz_agent.harness.history import recover_active_history
 from superbiz_agent.harness.stores import RolloutEventStore
+from superbiz_agent.memory.run_snapshots import CoreVersionSnapshotRegistry
 from superbiz_agent.model_gateway.base import ModelMessage
 
 
@@ -21,6 +22,7 @@ class ConversationRuntime:
         tool_schema_version: str,
         model_provider: str,
         context_manager: ContextManager | None = None,
+        core_version_snapshots: CoreVersionSnapshotRegistry | None = None,
     ) -> None:
         self.context_assembler = context_assembler
         self.context_manager = context_manager
@@ -28,6 +30,7 @@ class ConversationRuntime:
         self.prompt_version = prompt_version
         self.tool_schema_version = tool_schema_version
         self.model_provider = model_provider
+        self.core_version_snapshots = core_version_snapshots
         self._active_history_by_run: dict[str, list[ModelMessage]] = {}
         self._history_events_by_run = {}
 
@@ -84,7 +87,7 @@ class ConversationRuntime:
         run_context: RunContext,
         current_user_message: str,
     ) -> AssembledContext:
-        assembled = self.context_assembler.assemble(
+        assembled = await self.context_assembler.assemble(
             prepared_context=await self._prepare_context_if_enabled(
                 run_context,
                 current_user_message,
@@ -94,7 +97,7 @@ class ConversationRuntime:
             prompt_version=run_context.prompt_version,
             active_history=self._active_history_by_run.get(run_context.run_id, []),
             current_user_message=current_user_message,
-            request_context=run_context.request_context,
+            run_context=run_context,
         )
         await self.trace_store.append_event(
             run_context,
@@ -122,7 +125,7 @@ class ConversationRuntime:
     ):
         if self.context_manager is None:
             return None
-        prepared = self.context_manager.prepare(
+        prepared = await self.context_manager.prepare(
             run_context=run_context,
             prompt_version=run_context.prompt_version,
             active_history=self._active_history_by_run.get(run_context.run_id, []),
@@ -188,3 +191,5 @@ class ConversationRuntime:
     def cleanup_run(self, run_id: str) -> None:
         self._active_history_by_run.pop(run_id, None)
         self._history_events_by_run.pop(run_id, None)
+        if self.core_version_snapshots is not None:
+            self.core_version_snapshots.cleanup(run_id)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from sqlalchemy import Select, delete, select
 from sqlalchemy.exc import SQLAlchemyError

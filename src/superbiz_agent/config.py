@@ -106,6 +106,19 @@ class Settings(BaseSettings):
         return base / self.prompt_dir
 
     @model_validator(mode="after")
+    def validate_memory_backend(self) -> "Settings":
+        if self.memory_store_backend not in {"memory", "postgres"}:
+            raise ValueError(
+                "memory_store_backend must be 'memory' or 'postgres', "
+                f"got {self.memory_store_backend!r}"
+            )
+        if self.memory_store_backend == "postgres" and not self.memory_enabled:
+            raise ValueError(
+                "memory_store_backend cannot be 'postgres' when memory_enabled is false"
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_rag_settings(self) -> "Settings":
         app_env = self.app_env.strip().lower()
         if self.rag_fixture_mode is None:

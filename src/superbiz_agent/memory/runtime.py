@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy.ext.asyncio import AsyncEngine
+
 from superbiz_agent.config import Settings
 from superbiz_agent.harness.stores import RolloutEventStore
 from superbiz_agent.memory.archival import ArchivalMemoryService
@@ -19,6 +21,7 @@ from superbiz_agent.memory.run_snapshots import CoreVersionSnapshotRegistry
 from superbiz_agent.memory.search import MemorySearchService
 from superbiz_agent.memory.store import InMemoryMemoryStore
 from superbiz_agent.memory.tools import build_memory_tools
+from superbiz_agent.persistence.repositories.memory import PostgresMemoryRepository
 from superbiz_agent.tools.registry import ToolDefinition
 
 
@@ -40,6 +43,20 @@ class MemoryRuntimeComponents:
     context_provider: MemoryContextProvider
     tools: tuple[ToolDefinition, ...]
     trace_store: RolloutEventStore
+    engine: AsyncEngine | None = None
+
+    async def ensure_ready(self) -> None:
+        """Fail closed if the persistence backend does not satisfy the contract.
+
+        For the ``postgres`` backend this runs the named-schema capability probe.
+        For the ``memory`` backend the repository is always ready.
+        """
+        await self.repository.ensure_ready()
+
+    async def aclose(self) -> None:
+        """Dispose a PostgreSQL engine; a no-op for the in-memory backend."""
+        if self.engine is not None:
+            await self.engine.dispose()
 
 
 def build_memory_runtime(
@@ -47,10 +64,28 @@ def build_memory_runtime(
     *,
     trace_store: RolloutEventStore,
 ) -> MemoryRuntimeComponents:
-    """Create one isolated in-memory long-term-memory runtime."""
+    """Create one isolated long-term-memory runtime for the configured backend."""
 
-    store = InMemoryMemoryStore()
-    repository = InMemoryMemoryRepository(store)
+    backend = settings.memory_store_backend
+    if backend == "postgres":
+        from superbiz_agent.persistence.database import (
+            create_engine,
+            create_sessionmaker,
+        )
+
+        engine = create_engine(settings.database_url)
+        sessionmaker = create_sessionmaker(engine)
+        repository: MemoryRepository = PostgresMemoryRepository(sessionmaker)
+        fixture_admin: MemoryFixtureAdmin | None = None
+    elif backend == "memory":
+        store = InMemoryMemoryStore()
+        adapter = InMemoryMemoryRepository(store)
+        repository = adapter
+        fixture_admin = adapter
+        engine = None
+    else:  # pragma: no cover - guarded by Settings validation
+        raise ValueError(f"unsupported memory_store_backend: {backend!r}")
+
     policy = MemoryWritePolicy()
     embedding_service = DeterministicEmbeddingService(
         dimension=settings.memory_embedding_dimension
@@ -79,10 +114,10 @@ def build_memory_runtime(
         )
     )
     return MemoryRuntimeComponents(
-        backend="memory",
+        backend=backend,
         repository=repository,
         inspection_repository=repository,
-        fixture_admin=repository,
+        fixture_admin=fixture_admin,
         core_version_snapshots=snapshots,
         policy=policy,
         embedding_service=embedding_service,
@@ -93,4 +128,5 @@ def build_memory_runtime(
         context_provider=context_provider,
         tools=tools,
         trace_store=trace_store,
+        engine=engine,
     )

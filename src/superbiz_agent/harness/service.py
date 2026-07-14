@@ -73,6 +73,8 @@ class AgentHarnessService:
         self._close_task: asyncio.Task[None] | None = None
         self._closing = False
         self._closed = False
+        self._ready_lock = asyncio.Lock()
+        self._ready_task: asyncio.Task[None] | None = None
 
     @classmethod
     def build_default(
@@ -189,6 +191,27 @@ class AgentHarnessService:
 
         return cls.build_default(get_settings())
 
+    async def astart(self) -> None:
+        """Actively verify backend readiness before serving requests.
+
+        FastAPI lifespan calls this so a misconfigured ``postgres`` memory
+        backend fails closed at startup instead of serving silently broken
+        memory. The probe runs at most once and is shared by all waiters.
+        """
+        await self.ensure_ready()
+
+    async def ensure_ready(self) -> None:
+        """Defensive readiness check used directly by ``chat``/``chat_stream``."""
+        async with self._ready_lock:
+            if self._ready_task is None or self._ready_task.done():
+                self._ready_task = asyncio.ensure_future(self._readiness_probe())
+            task = self._ready_task
+        await asyncio.shield(task)
+
+    async def _readiness_probe(self) -> None:
+        if self.memory_runtime is not None and self.memory_runtime.backend == "postgres":
+            await self.memory_runtime.ensure_ready()
+
     async def chat(self, context: AgentRequestContext, question: str) -> AgentChatResult:
         if not question.strip():
             return AgentChatResult(
@@ -200,6 +223,7 @@ class AgentHarnessService:
         async with self.lock_manager.acquire(context):
             run_context = None
             try:
+                await self.ensure_ready()
                 run_context = await self.runtime.start_run(context, question)
                 await self.runtime.append_user_message(run_context, question)
                 assembled = await self.runtime.assemble_context(run_context, question)
@@ -243,6 +267,7 @@ class AgentHarnessService:
             run_context = None
             answer = ""
             try:
+                await self.ensure_ready()
                 run_context = await self.runtime.start_run(context, question)
                 await self.runtime.append_user_message(run_context, question)
                 assembled = await self.runtime.assemble_context(run_context, question)
@@ -304,12 +329,24 @@ class AgentHarnessService:
         await asyncio.shield(task)
 
     async def _close_resources(self) -> None:
+        labels: list[str] = []
+        failures: list[tuple[str, BaseException]] = []
+        if self.memory_runtime is not None:
+            try:
+                await self.memory_runtime.aclose()
+                labels.append("memory_runtime")
+            except (Exception, asyncio.CancelledError) as exc:
+                failures.append(("memory_runtime", exc))
         close = getattr(self.rag_retrieval_service, "aclose", None)
         if callable(close):
             try:
                 await close()
-            except (Exception, asyncio.CancelledError):
-                raise RuntimeError("Failed to close Harness resources: rag_runtime.") from None
+                labels.append("rag_runtime")
+            except (Exception, asyncio.CancelledError) as exc:
+                failures.append(("rag_runtime", exc))
+        if failures:
+            detail = ", ".join(f"{label}: {type(exc).__name__}" for label, exc in failures)
+            raise RuntimeError(f"Failed to close Harness resources: {detail}") from None
         async with self._close_lock:
             self._closed = True
 

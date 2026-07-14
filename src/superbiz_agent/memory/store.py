@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from superbiz_agent.memory.dedup import canonical_content_hash
+from superbiz_agent.memory.dedup import canonical_content_hash, stable_tag_union
 from superbiz_agent.memory.errors import CoreMemoryContractError
 from superbiz_agent.memory.schemas import (
     CORE_BLOCK_SPECS,
@@ -202,7 +202,7 @@ class InMemoryMemoryStore:
         candidate = replace(
             memory,
             content_hash=canonical_hash,
-            tags=_stable_tag_union([], memory.tags),
+            tags=stable_tag_union([], memory.tags),
         )
         candidate_key = _archival_exact_key(candidate)
         with self._lock:
@@ -221,7 +221,7 @@ class InMemoryMemoryStore:
                 )
 
             existing = min(equivalents, key=lambda item: (item.created_at, item.id))
-            merged_tags = _stable_tag_union(existing.tags, candidate.tags)
+            merged_tags = stable_tag_union(existing.tags, candidate.tags)
             metadata_merged = merged_tags != existing.tags
             updated = replace(
                 existing,
@@ -388,18 +388,6 @@ def _archival_exact_key(
         memory.scope_env,
         canonical_content_hash(memory.content),
     )
-
-
-def _stable_tag_union(existing: Iterable[str], incoming: Iterable[str]) -> list[str]:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for raw_tag in (*existing, *incoming):
-        tag = raw_tag.strip()
-        if not tag or tag in seen:
-            continue
-        merged.append(tag)
-        seen.add(tag)
-    return merged
 
 
 def confidence_label_for(similarity: float) -> str | None:

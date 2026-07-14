@@ -1,5 +1,6 @@
 """Repository implementations for persistence backends."""
 
+from superbiz_agent.persistence.repositories.memory import PostgresMemoryRepository
 from superbiz_agent.persistence.repositories.rag import (
     RagClaimLostError,
     RagDocumentArchivedError,
@@ -14,6 +15,7 @@ from superbiz_agent.persistence.repositories.rag import (
 )
 
 __all__ = [
+    "PostgresMemoryRepository",
     "RagClaimLostError",
     "RagDocumentArchivedError",
     "RagDocumentClaim",

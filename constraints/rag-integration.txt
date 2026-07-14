@@ -1,0 +1,6 @@
+llama-index-core==0.14.23
+llama-index-vector-stores-milvus==1.1.0
+pymilvus==2.6.16
+milvus-lite==3.0
+jieba==0.42.1
+openai==2.45.0

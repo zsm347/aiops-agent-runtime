@@ -63,8 +63,15 @@ class InMemoryMemoryStore:
                 for block_key in DEFAULT_CORE_BLOCK_KEYS
             }
             if any(
-                block is not None and block.status != "active"
-                for block in existing.values()
+                block is not None
+                and not _valid_existing_default_core_block(
+                    block,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    block_key=block_key,
+                )
+                for block_key, block in existing.items()
             ):
                 raise CoreMemoryContractError()
 
@@ -390,6 +397,33 @@ def _archival_exact_key(
         memory.scope_service,
         memory.scope_env,
         canonical_content_hash(memory.content),
+    )
+
+
+def _valid_existing_default_core_block(
+    block: CoreMemoryBlock,
+    *,
+    tenant_id: str,
+    user_id: str,
+    agent_id: str,
+    block_key: str,
+) -> bool:
+    return (
+        isinstance(block.id, str)
+        and bool(block.id.strip())
+        and block.tenant_id == tenant_id
+        and block.user_id == user_id
+        and block.agent_id == agent_id
+        and block.block_key == block_key
+        and block.status == "active"
+        and isinstance(block.version, int)
+        and not isinstance(block.version, bool)
+        and block.version >= 1
+        and isinstance(block.max_tokens, int)
+        and not isinstance(block.max_tokens, bool)
+        and block.max_tokens > 0
+        and isinstance(block.content, str)
+        and block.content_hash == content_hash(block.content)
     )
 
 

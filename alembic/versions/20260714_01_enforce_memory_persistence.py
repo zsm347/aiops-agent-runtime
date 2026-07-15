@@ -336,7 +336,8 @@ def upgrade() -> None:
     op.create_check_constraint(
         CORE_CONTENT_HASH_FORMAT_CHECK,
         "agent_core_memory_block",
-        "content_hash = '' OR content_hash ~ '^[0-9a-f]{64}$'",
+        "content_hash IS NOT NULL AND "
+        "(content_hash = '' OR content_hash ~ '^[0-9a-f]{64}$')",
     )
     op.create_index(
         ACTIVE_EXACT_INDEX,

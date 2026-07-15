@@ -13,7 +13,9 @@ from superbiz_agent.evals.memory_fixtures import (
 from superbiz_agent.evals.memory_snapshots import MemorySnapshotProvider
 from superbiz_agent.harness.context import AgentRequestContext, RunContext
 from superbiz_agent.memory.errors import CoreMemoryContractError, MemoryStoreIsolationError
+from superbiz_agent.memory.adapters.in_memory import InMemoryMemoryRepository
 from superbiz_agent.memory.schemas import CORE_BLOCK_SPECS, CoreMemoryBlock
+from superbiz_agent.memory.store import content_hash
 from superbiz_agent.harness.service import AgentHarnessService
 from superbiz_agent.harness.trace_store import InMemoryRolloutEventStore
 from superbiz_agent.memory.runtime import build_memory_runtime
@@ -363,6 +365,51 @@ async def test_in_memory_default_core_initialization_is_all_or_nothing() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"id": ""},
+        {"tenant_id": "other"},
+        {"user_id": "other"},
+        {"agent_id": "other"},
+        {"block_key": "other"},
+        {"status": "archived"},
+        {"version": 0},
+        {"version": True},
+        {"max_tokens": 0},
+        {"max_tokens": True},
+        {"content": 7},
+        {"content_hash": "wrong"},
+    ],
+)
+async def test_in_memory_default_core_rejects_malformed_existing_before_writes(
+    overrides: dict[str, object],
+) -> None:
+    _trace_store, runtime = _runtime()
+    admin = runtime.fixture_admin
+    assert isinstance(admin, InMemoryMemoryRepository)
+    malformed = CoreMemoryBlock(
+        tenant_id="tenant",
+        user_id="user",
+        agent_id="agent",
+        block_key="service_notes",
+        description=CORE_BLOCK_SPECS["service_notes"].description,
+        max_tokens=CORE_BLOCK_SPECS["service_notes"].max_tokens,
+    )
+    for field_name, value in overrides.items():
+        setattr(malformed, field_name, value)
+    admin.store._core_blocks[("tenant", "user", "agent", "service_notes")] = malformed
+
+    with pytest.raises(CoreMemoryContractError):
+        await runtime.repository.ensure_default_core_blocks("tenant", "user", "agent")
+
+    blocks = await runtime.inspection_repository.list_core_blocks_for_scope(
+        "tenant", "user", "agent"
+    )
+    assert len(blocks) == 1
+
+
+@pytest.mark.asyncio
 async def test_core_snapshot_capture_once_rejects_concurrent_replacement() -> None:
     trace_store, runtime = _runtime()
     service = AgentHarnessService.build_default(
@@ -392,7 +439,12 @@ async def test_core_snapshot_capture_once_rejects_concurrent_replacement() -> No
         if block.block_key == "user_rules"
     )
     await admin.upsert_core_block(
-        replace(current, content="并发更新", content_hash="external", version=current.version + 1)
+        replace(
+            current,
+            content="并发更新",
+            content_hash=content_hash("并发更新"),
+            version=current.version + 1,
+        )
     )
     await service.runtime.assemble_context(run_context, "再次组装上下文")
 

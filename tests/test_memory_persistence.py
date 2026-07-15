@@ -39,6 +39,18 @@ from superbiz_agent.persistence.repositories.memory import (
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
 
 
+class _ConstraintViolation(RuntimeError):
+    def __init__(self, constraint_name: str) -> None:
+        super().__init__("constraint violation")
+        self.constraint_name = constraint_name
+
+
+def _wrapped_constraint_violation(constraint_name: str) -> RuntimeError:
+    wrapper = RuntimeError("SQLAlchemy asyncpg adapter wrapper")
+    wrapper.__cause__ = _ConstraintViolation(constraint_name)
+    return wrapper
+
+
 class _MappingsResult:
     def __init__(self, *, one: dict[str, Any] | None = None, rows=()) -> None:
         self.one = one
@@ -200,12 +212,13 @@ def _ready_catalog_results(
     constraint_overrides: dict[str, Any] | None = None,
     index_overrides: dict[str, Any] | None = None,
     vector_overrides: dict[str, Any] | None = None,
+    core_hash_overrides: dict[str, Any] | None = None,
 ) -> list[_MappingsResult]:
     memory_oid = 101
     core_oid = 202
     expressions = {
         "chk_long_term_memory_active_content_hash": (
-            "status <> 'active'::text OR content_hash IS NOT NULL "
+            "status::text <> 'active'::text OR content_hash IS NOT NULL "
             "AND content_hash::text ~ '^[0-9a-f]{64}$'::text"
         ),
         "chk_long_term_memory_scope_service_nonblank": (
@@ -223,8 +236,8 @@ def _ready_catalog_results(
         "chk_core_memory_version_positive": "version >= 1",
         "chk_core_memory_max_tokens_positive": "max_tokens > 0",
         "chk_core_memory_content_hash_format": (
-            "content_hash::text = ''::text OR "
-            "content_hash::text ~ '^[0-9a-f]{64}$'::text"
+            "content_hash IS NOT NULL AND (content_hash::text = ''::text OR "
+            "content_hash::text ~ '^[0-9a-f]{64}$'::text)"
         ),
     }
     memory_names = {
@@ -238,6 +251,9 @@ def _ready_catalog_results(
             "relation_oid": memory_oid if name in memory_names else core_oid,
             "conname": name,
             "contype": "c",
+            "convalidated": True,
+            "condeferrable": False,
+            "condeferred": False,
             "expression": expression,
             "key_columns": [],
         }
@@ -248,6 +264,9 @@ def _ready_catalog_results(
             "relation_oid": core_oid,
             "conname": CORE_UNIQUE_CONSTRAINT,
             "contype": "u",
+            "convalidated": True,
+            "condeferrable": False,
+            "condeferred": False,
             "expression": None,
             "key_columns": ["tenant_id", "user_id", "agent_id", "block_key"],
         }
@@ -285,6 +304,13 @@ def _ready_catalog_results(
     }
     if vector_overrides:
         vector.update(vector_overrides)
+    core_hash = {
+        "relation_oid": core_oid,
+        "attname": "content_hash",
+        "attnotnull": True,
+    }
+    if core_hash_overrides:
+        core_hash.update(core_hash_overrides)
     return [
         _MappingsResult(
             one={
@@ -297,6 +323,7 @@ def _ready_catalog_results(
         _MappingsResult(rows=rows),
         _MappingsResult(one=index),
         _MappingsResult(one=vector),
+        _MappingsResult(one=core_hash),
     ]
 
 
@@ -323,6 +350,15 @@ def _migration_module():
     return module
 
 
+def _acceptance_module():
+    path = Path(__file__).resolve().parent / "test_memory_postgres_acceptance.py"
+    spec = spec_from_file_location("m_p2_postgres_acceptance_guard", path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_models_freeze_exact_index_and_integrity_names() -> None:
     memory_constraints = {item.name for item in MemoryModel.__table__.constraints}
     core_constraints = {item.name for item in AgentCoreMemoryBlock.__table__.constraints}
@@ -334,7 +370,13 @@ def test_models_freeze_exact_index_and_integrity_names() -> None:
     active_hash = next(
         item for item in MemoryModel.__table__.constraints if item.name == ACTIVE_CONTENT_HASH_CHECK
     )
+    core_hash = next(
+        item
+        for item in AgentCoreMemoryBlock.__table__.constraints
+        if item.name == "chk_core_memory_content_hash_format"
+    )
     assert "content_hash IS NOT NULL" in str(active_hash.sqltext)
+    assert "content_hash IS NOT NULL" in str(core_hash.sqltext)
     assert exact_index.unique is True
     ddl = str(CreateIndex(exact_index).compile(dialect=postgresql.dialect()))
     assert "COALESCE(scope_service, '')" in ddl
@@ -396,10 +438,28 @@ async def test_archival_duplicate_merges_tags_without_loading_or_updating_vector
 @pytest.mark.asyncio
 async def test_primary_key_or_other_integrity_conflict_is_not_reported_duplicate() -> None:
     session = _Session(
-        execute_error=IntegrityError("safe", {}, RuntimeError("constraint"))
+        execute_error=IntegrityError(
+            "safe",
+            {},
+            _wrapped_constraint_violation("long_term_memory_pkey"),
+        )
     )
 
     with pytest.raises(MemoryExactConflictUnresolvedError):
+        await _repository(session).write_archival_exact(_memory())
+
+
+@pytest.mark.asyncio
+async def test_non_key_integrity_error_maps_to_store_contract_error() -> None:
+    session = _Session(
+        execute_error=IntegrityError(
+            "safe",
+            {},
+            _wrapped_constraint_violation("chk_long_term_memory_usage_count"),
+        )
+    )
+
+    with pytest.raises(MemoryStoreContractError):
         await _repository(session).write_archival_exact(_memory())
 
 
@@ -507,6 +567,13 @@ async def test_readiness_rejects_old_schema_and_accepts_frozen_capabilities() ->
         ),
         (
             {
+                "conname": "chk_long_term_memory_active_content_hash",
+                "convalidated": False,
+            },
+            "constraint",
+        ),
+        (
+            {
                 "conname": CORE_UNIQUE_CONSTRAINT,
                 "key_columns": [
                     "tenant_id",
@@ -518,11 +585,19 @@ async def test_readiness_rejects_old_schema_and_accepts_frozen_capabilities() ->
             },
             "constraint",
         ),
+        (
+            {
+                "conname": CORE_UNIQUE_CONSTRAINT,
+                "condeferrable": True,
+            },
+            "constraint",
+        ),
         ({"indisunique": False}, "index"),
         ({"indisvalid": False}, "index"),
         ({"indisready": False}, "index"),
         ({"indnkeyatts": 8, "indnatts": 8}, "index"),
         ({"predicate": "status = 'active' OR status = 'archived'"}, "index"),
+        ({"predicate": "status::name = 'active'::name"}, "index"),
         (
             {
                 "key_expressions": [
@@ -537,8 +612,23 @@ async def test_readiness_rejects_old_schema_and_accepts_frozen_capabilities() ->
             },
             "index",
         ),
+        (
+            {
+                "key_expressions": [
+                    "tenant_id",
+                    "user_id",
+                    "agent_id",
+                    "type",
+                    "COALESCE(scope_service::text, ''::text)",
+                    "COALESCE(scope_env, ''::character varying)",
+                    "content_hash",
+                ]
+            },
+            "index",
+        ),
         ({"relation_oid": 202}, "vector"),
         ({"formatted_type": "vector(64)"}, "vector"),
+        ({"attnotnull": False}, "core_hash"),
     ],
 )
 async def test_readiness_rejects_wrong_relation_or_near_match_capability(
@@ -626,14 +716,93 @@ def test_alembic_url_uses_settings_only_without_explicit_attribute() -> None:
 
 
 @pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql+asyncpg://localhost/postgres",
+        "postgresql+asyncpg://localhost/super_biz_agent",
+        "postgresql+asyncpg://localhost/",
+        "postgresql+asyncpg://localhost/empty_development",
+        "postgresql+asyncpg://localhost/superbiz_agent_prod",
+        "postgresql+asyncpg:///dedicated_m_p2_test",
+        "sqlite+aiosqlite:///dedicated_m_p2_test",
+    ],
+)
+def test_destructive_postgres_guard_rejects_default_or_non_dedicated_urls(
+    database_url: str,
+) -> None:
+    acceptance = _acceptance_module()
+
+    with pytest.raises(RuntimeError):
+        acceptance._validated_destructive_database_name(
+            database_url,
+            acceptance.DESTRUCTIVE_CONFIRMATION_VALUE,
+        )
+
+
+def test_destructive_postgres_guard_requires_independent_confirmation_and_marker() -> None:
+    acceptance = _acceptance_module()
+    database_url = "postgresql+asyncpg://wrong-host/dedicated_m_p2_test"
+    with pytest.raises(RuntimeError, match="confirmation"):
+        acceptance._validated_destructive_database_name(database_url, None)
+    expected_database = acceptance._validated_destructive_database_name(
+        database_url,
+        acceptance.DESTRUCTIVE_CONFIRMATION_VALUE,
+    )
+
+    class SameNameNonTestConnection:
+        def __init__(self) -> None:
+            self.results = [expected_database, None]
+
+        def scalar(self, _statement):
+            return self.results.pop(0)
+
+    with pytest.raises(RuntimeError, match="not marked"):
+        acceptance._validate_dedicated_connection(
+            SameNameNonTestConnection(),
+            expected_database=expected_database,
+        )
+
+
+@pytest.mark.asyncio
+async def test_destructive_guard_failure_never_calls_alembic_downgrade(monkeypatch) -> None:
+    acceptance = _acceptance_module()
+    called = False
+
+    def forbidden_downgrade(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        acceptance,
+        "DATABASE_URL",
+        "postgresql+asyncpg://localhost/dedicated_m_p2_test",
+    )
+    monkeypatch.setattr(acceptance, "DESTRUCTIVE_CONFIRMATION", "wrong")
+    monkeypatch.setattr(acceptance.command, "downgrade", forbidden_downgrade)
+
+    with pytest.raises(RuntimeError, match="confirmation"):
+        await acceptance._downgrade("base")
+
+    assert called is False
+
+
+@pytest.mark.parametrize(
     "overrides",
     [
         {"content": " !!! "},
         {"embedding": [float("nan")] * 64},
         {"embedding": [float("inf")] * 64},
         {"embedding_dimension": 0},
+        {"embedding_dimension": 17},
+        {"embedding": [0.0] * 63},
+        {"embedding": [10**10000, *([0.0] * 63)]},
         {"embedding_model": ""},
         {"embedding_version": ""},
+        {"id": ""},
+        {"id": "   "},
+        {"usage_count": -1},
+        {"usage_count": True},
+        {"last_used_at": "invalid"},
         {"source": "memory_service"},
         {"status": "archived"},
         {"type": "rule"},

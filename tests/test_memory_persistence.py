@@ -560,6 +560,22 @@ def test_migration_freezes_canonicalizer_names_and_single_head() -> None:
         assert migration._canonical_content_hash(sample) == canonical_content_hash(sample)
 
 
+def test_migration_rejects_malformed_existing_core_hash_before_backfill() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "20260714_01_enforce_memory_persistence.py"
+    ).read_text(encoding="utf-8")
+    upgrade_source = source[source.index("def upgrade()") :]
+    reject_position = upgrade_source.index(
+        "_reject_malformed_existing_core_hashes(connection)"
+    )
+    backfill_position = upgrade_source.index("_backfill_core_hashes(connection)")
+
+    assert reject_position < backfill_position
+
+
 def test_local_deterministic_candidate_timestamps_are_valid() -> None:
     memory = _memory(created_at=utc_now(), updated_at=utc_now())
     assert memory.embedding_dimension == 64

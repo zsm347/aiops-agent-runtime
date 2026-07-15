@@ -155,6 +155,18 @@ def _backfill_core_hashes(connection: sa.Connection) -> None:
         last_id = str(rows[-1]["id"])
 
 
+def _reject_malformed_existing_core_hashes(connection: sa.Connection) -> None:
+    _invalid_rows(
+        connection,
+        table="agent_core_memory_block",
+        predicate=(
+            "content_hash IS NOT NULL "
+            "AND content_hash !~ '^(|[0-9a-f]{64})$'"
+        ),
+        code="memory_migration_invalid_core_hash",
+    )
+
+
 def _normalize_tags(connection: sa.Connection) -> None:
     _invalid_rows(
         connection,
@@ -274,6 +286,7 @@ def upgrade() -> None:
     connection = op.get_bind()
     _normalize_scopes(connection)
     _backfill_archival_hashes(connection)
+    _reject_malformed_existing_core_hashes(connection)
     _backfill_core_hashes(connection)
     _normalize_tags(connection)
     _preflight(connection)

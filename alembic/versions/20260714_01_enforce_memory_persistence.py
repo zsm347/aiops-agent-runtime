@@ -66,6 +66,21 @@ def _safe_failure(code: str, *, count: int, row_ids: list[str]) -> RuntimeError:
     return RuntimeError(f"{code}: count={count}; row_ids={ids}")
 
 
+def _reject_blank_ids(connection: sa.Connection) -> None:
+    _invalid_rows(
+        connection,
+        table="long_term_memory",
+        predicate="btrim(id) = ''",
+        code="memory_migration_invalid_memory_id",
+    )
+    _invalid_rows(
+        connection,
+        table="agent_core_memory_block",
+        predicate="btrim(id) = ''",
+        code="memory_migration_invalid_core_id",
+    )
+
+
 def _normalize_scopes(connection: sa.Connection) -> None:
     last_id = ""
     while True:
@@ -284,6 +299,7 @@ def _preflight(connection: sa.Connection) -> None:
 
 def upgrade() -> None:
     connection = op.get_bind()
+    _reject_blank_ids(connection)
     _normalize_scopes(connection)
     _backfill_archival_hashes(connection)
     _reject_malformed_existing_core_hashes(connection)

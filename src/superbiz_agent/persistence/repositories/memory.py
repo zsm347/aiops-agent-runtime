@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime
 import math
 import re
@@ -193,11 +194,12 @@ class PostgresMemoryRepository:
         *,
         statuses: Iterable[str] | None = None,
     ) -> list[CoreMemoryBlock]:
+        normalized_statuses = _normalize_statuses_argument(statuses)
         return await self._list_core_blocks(
             tenant_id,
             user_id,
             agent_id,
-            statuses=tuple(statuses) if statuses is not None else None,
+            statuses=normalized_statuses,
         )
 
     async def _list_core_blocks(
@@ -236,7 +238,8 @@ class PostgresMemoryRepository:
     ) -> CoreContentWriteResult:
         _require_identity(tenant_id, user_id, agent_id)
         if (
-            block_key not in CORE_BLOCK_SPECS
+            not isinstance(block_key, str)
+            or block_key not in CORE_BLOCK_SPECS
             or not isinstance(content, str)
             or not isinstance(expected_version, int)
             or isinstance(expected_version, bool)
@@ -419,8 +422,7 @@ class PostgresMemoryRepository:
         *,
         statuses: Iterable[str] | None = None,
     ) -> list[MemoryRecord]:
-        normalized_statuses = tuple(statuses) if statuses is not None else None
-        _validate_statuses(normalized_statuses)
+        normalized_statuses = _normalize_statuses_argument(statuses)
         statement = self._memory_scope_statement(tenant_id, user_id, agent_id)
         if normalized_statuses is not None:
             statement = statement.where(LongTermMemory.status.in_(normalized_statuses))
@@ -719,8 +721,11 @@ def _normalize_archival_candidate(memory: MemoryRecord) -> MemoryRecord:
     ):
         raise MemoryStoreContractError()
     if (
-        memory.status != "active"
+        not isinstance(memory.status, str)
+        or memory.status != "active"
+        or not isinstance(memory.type, str)
         or memory.type not in _ARCHIVAL_TYPES
+        or not isinstance(memory.source, str)
         or memory.source not in _MEMORY_SOURCES
     ):
         raise MemoryStoreContractError()
@@ -743,11 +748,11 @@ def _normalize_archival_candidate(memory: MemoryRecord) -> MemoryRecord:
         or not isinstance(memory.usage_count, int)
         or isinstance(memory.usage_count, bool)
         or memory.usage_count < 0
-        or not isinstance(memory.created_at, datetime)
-        or not isinstance(memory.updated_at, datetime)
+        or not _is_timezone_aware_datetime(memory.created_at)
+        or not _is_timezone_aware_datetime(memory.updated_at)
         or (
             memory.last_used_at is not None
-            and not isinstance(memory.last_used_at, datetime)
+            and not _is_timezone_aware_datetime(memory.last_used_at)
         )
         or memory.archived_at is not None
         or memory.archive_reason is not None
@@ -759,14 +764,12 @@ def _normalize_archival_candidate(memory: MemoryRecord) -> MemoryRecord:
         raise MemoryStoreContractError()
     _embedding_for_write(memory)
     canonical_hash = canonical_content_hash(memory.content)
-    return MemoryRecord(
-        **{
-            **memory.__dict__,
-            "scope_service": _blank_to_none(memory.scope_service),
-            "scope_env": _blank_to_none(memory.scope_env),
-            "tags": stable_tag_union([], memory.tags),
-            "content_hash": canonical_hash,
-        }
+    return replace(
+        memory,
+        scope_service=_blank_to_none(memory.scope_service),
+        scope_env=_blank_to_none(memory.scope_env),
+        tags=stable_tag_union([], memory.tags),
+        content_hash=canonical_hash,
     )
 
 
@@ -930,13 +933,32 @@ def _require_identity(tenant_id: str, user_id: str, agent_id: str) -> None:
 
 
 def _validate_statuses(statuses: tuple[str, ...] | None) -> None:
-    if statuses is not None and any(status not in _MEMORY_STATUSES for status in statuses):
+    if statuses is not None and any(
+        not isinstance(status, str) or status not in _MEMORY_STATUSES
+        for status in statuses
+    ):
         raise MemoryStoreContractError()
 
 
 def _validate_memory_types(types: Sequence[str]) -> None:
-    if any(memory_type not in _MEMORY_TYPES for memory_type in types):
+    if any(
+        not isinstance(memory_type, str) or memory_type not in _MEMORY_TYPES
+        for memory_type in types
+    ):
         raise MemoryStoreContractError()
+
+
+def _normalize_statuses_argument(
+    statuses: Iterable[str] | None,
+) -> tuple[str, ...] | None:
+    if statuses is None:
+        return None
+    try:
+        normalized = tuple(statuses)
+    except TypeError:
+        raise MemoryStoreContractError() from None
+    _validate_statuses(normalized)
+    return normalized
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -956,7 +978,7 @@ def _validated_scope(value: Any) -> str | None:
 
 
 def _datetime(value: Any) -> datetime:
-    if not isinstance(value, datetime):
+    if not _is_timezone_aware_datetime(value):
         raise MemoryStoreContractError()
     return value
 
@@ -965,50 +987,195 @@ def _optional_datetime(value: Any) -> datetime | None:
     return None if value is None else _datetime(value)
 
 
+def _is_timezone_aware_datetime(value: Any) -> bool:
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        return False
+    try:
+        return value.utcoffset() is not None
+    except Exception:
+        return False
+
+
 _SQL_TOKEN_RE = re.compile(
-    r"'(?:''|[^'])*'|::|<>|>=|<=|=|~|>|<|\[|\]|[a-z_][a-z0-9_]*|[0-9]+",
+    r"\s+|'(?:''|[^'])*'|!~\*|!~|~\*|!=|::|<>|>=|<=|=|~|>|<|"
+    r"\(|\)|\[|\]|,|[a-z_][a-z0-9_]*|[0-9]+",
     flags=re.IGNORECASE,
+)
+_SQL_IDENTIFIER_RE = re.compile(r"[a-z_][a-z0-9_]*", flags=re.IGNORECASE)
+_SQL_COMPARISON_OPERATORS = frozenset(
+    {"=", "!=", "<>", "~", "!~", "~*", "!~*", ">=", "<=", ">", "<"}
 )
 
 
-def _expression_tokens(value: Any) -> tuple[str, ...]:
-    normalized = str(value).replace('"', "").lower()
-    normalized = re.sub(r"character\s+varying", "varchar", normalized)
-    tokens = tuple(_SQL_TOKEN_RE.findall(normalized))
-    return tokens
+def _scan_sql_expression(value: Any) -> tuple[str, ...]:
+    source = str(value)
+    tokens: list[str] = []
+    position = 0
+    while position < len(source):
+        match = _SQL_TOKEN_RE.match(source, position)
+        if match is None:
+            raise MemoryStoreContractError()
+        token = match.group(0)
+        position = match.end()
+        if token.isspace():
+            continue
+        tokens.append(token if token.startswith("'") else token.lower())
+    if not tokens:
+        raise MemoryStoreContractError()
+    return tuple(tokens)
 
 
-_EXPECTED_CHECK_TOKENS = {
-    "chk_long_term_memory_active_content_hash": _expression_tokens(
+class _SqlExpressionParser:
+    def __init__(self, tokens: tuple[str, ...]) -> None:
+        self.tokens = tokens
+        self.position = 0
+
+    def parse(self) -> tuple[Any, ...]:
+        expression = self._parse_or()
+        if self._peek() is not None:
+            raise MemoryStoreContractError()
+        return expression
+
+    def _parse_or(self) -> tuple[Any, ...]:
+        expression = self._parse_and()
+        while self._accept("or"):
+            expression = ("or", expression, self._parse_and())
+        return expression
+
+    def _parse_and(self) -> tuple[Any, ...]:
+        expression = self._parse_comparison()
+        while self._accept("and"):
+            expression = ("and", expression, self._parse_comparison())
+        return expression
+
+    def _parse_comparison(self) -> tuple[Any, ...]:
+        left = self._parse_postfix()
+        if self._accept("is"):
+            negated = self._accept("not")
+            self._expect("null")
+            return ("is_not_null" if negated else "is_null", left)
+        operator = self._peek()
+        if operator in _SQL_COMPARISON_OPERATORS:
+            self.position += 1
+            return ("compare", operator, left, self._parse_postfix())
+        return left
+
+    def _parse_postfix(self) -> tuple[Any, ...]:
+        expression = self._parse_primary()
+        while self._accept("::"):
+            type_name = self._consume_identifier()
+            if type_name == "character" and self._accept("varying"):
+                type_name = "varchar"
+            while self._accept("["):
+                self._expect("]")
+                type_name += "[]"
+            expression = ("cast", expression, type_name)
+        return expression
+
+    def _parse_primary(self) -> tuple[Any, ...]:
+        if self._accept("("):
+            expression = self._parse_or()
+            self._expect(")")
+            return expression
+        token = self._peek()
+        if token is None:
+            raise MemoryStoreContractError()
+        self.position += 1
+        if token.startswith("'"):
+            return ("literal", token)
+        if token.isdigit():
+            return ("number", token)
+        if _SQL_IDENTIFIER_RE.fullmatch(token) is None:
+            raise MemoryStoreContractError()
+        if token == "array" and self._accept("["):
+            values = self._parse_arguments("]")
+            return ("array", values)
+        if self._accept("("):
+            arguments = self._parse_arguments(")")
+            return ("call", token, arguments)
+        return ("identifier", token)
+
+    def _parse_arguments(self, closing_token: str) -> tuple[tuple[Any, ...], ...]:
+        arguments: list[tuple[Any, ...]] = []
+        if self._accept(closing_token):
+            return tuple(arguments)
+        while True:
+            arguments.append(self._parse_or())
+            if self._accept(closing_token):
+                return tuple(arguments)
+            self._expect(",")
+
+    def _consume_identifier(self) -> str:
+        token = self._peek()
+        if token is None or _SQL_IDENTIFIER_RE.fullmatch(token) is None:
+            raise MemoryStoreContractError()
+        self.position += 1
+        return token
+
+    def _peek(self) -> str | None:
+        return self.tokens[self.position] if self.position < len(self.tokens) else None
+
+    def _accept(self, token: str) -> bool:
+        if self._peek() != token:
+            return False
+        self.position += 1
+        return True
+
+    def _expect(self, token: str) -> None:
+        if not self._accept(token):
+            raise MemoryStoreContractError()
+
+
+def _expression_signature(value: Any) -> tuple[Any, ...]:
+    return _SqlExpressionParser(_scan_sql_expression(value)).parse()
+
+
+_EXPECTED_CHECK_SIGNATURES = {
+    "chk_long_term_memory_active_content_hash": _expression_signature(
         "status::text <> 'active'::text OR content_hash IS NOT NULL "
         "AND content_hash::text ~ '^[0-9a-f]{64}$'::text"
     ),
-    "chk_long_term_memory_scope_service_nonblank": _expression_tokens(
+    "chk_long_term_memory_scope_service_nonblank": _expression_signature(
         "scope_service IS NULL OR btrim(scope_service::text) <> ''::text"
     ),
-    "chk_long_term_memory_scope_env_nonblank": _expression_tokens(
+    "chk_long_term_memory_scope_env_nonblank": _expression_signature(
         "scope_env IS NULL OR btrim(scope_env::text) <> ''::text"
     ),
-    "chk_long_term_memory_tags_array": _expression_tokens(
+    "chk_long_term_memory_tags_array": _expression_signature(
         "jsonb_typeof(tags) = 'array'::text"
     ),
-    "chk_core_memory_version_positive": _expression_tokens("version >= 1"),
-    "chk_core_memory_max_tokens_positive": _expression_tokens("max_tokens > 0"),
-    "chk_core_memory_content_hash_format": _expression_tokens(
+    "chk_core_memory_version_positive": _expression_signature("version >= 1"),
+    "chk_core_memory_max_tokens_positive": _expression_signature("max_tokens > 0"),
+    "chk_core_memory_content_hash_format": _expression_signature(
         "content_hash IS NOT NULL AND (content_hash::text = ''::text "
         "OR content_hash::text ~ '^[0-9a-f]{64}$'::text)"
     ),
 }
-_CORE_BLOCK_KEY_TOKEN_VARIANTS = {
-    _expression_tokens(
+_CORE_BLOCK_KEY_SIGNATURE_VARIANTS = {
+    _expression_signature(
         "block_key::text = ANY (ARRAY['user_rules'::varchar, "
         "'user_ops_profile'::varchar, 'service_notes'::varchar]::text[])"
     ),
-    _expression_tokens(
+    _expression_signature(
         "block_key::text = ANY (ARRAY['user_rules'::text, "
         "'user_ops_profile'::text, 'service_notes'::text])"
     ),
 }
+_EXPECTED_EXACT_KEY_SIGNATURES = tuple(
+    _expression_signature(value)
+    for value in (
+        "tenant_id",
+        "user_id",
+        "agent_id",
+        "type",
+        "COALESCE(scope_service, ''::varchar)",
+        "COALESCE(scope_env, ''::varchar)",
+        "content_hash",
+    )
+)
+_EXPECTED_EXACT_PREDICATE_SIGNATURE = _expression_signature(
+    "status::text = 'active'::text"
+)
 _MEMORY_CHECKS = frozenset(
     {
         "chk_long_term_memory_active_content_hash",
@@ -1041,11 +1208,11 @@ def _validate_constraint_definitions(
             or row["condeferred"] is not False
         ):
             raise MemoryStoreContractError()
-        actual_tokens = _expression_tokens(row["expression"])
+        actual_signature = _expression_signature(row["expression"])
         if name == "chk_core_memory_block_key":
-            valid = actual_tokens in _CORE_BLOCK_KEY_TOKEN_VARIANTS
+            valid = actual_signature in _CORE_BLOCK_KEY_SIGNATURE_VARIANTS
         else:
-            valid = actual_tokens == _EXPECTED_CHECK_TOKENS[name]
+            valid = actual_signature == _EXPECTED_CHECK_SIGNATURES[name]
         if not valid:
             raise MemoryStoreContractError()
 
@@ -1077,22 +1244,11 @@ def _valid_exact_index(row: Mapping[str, Any], *, memory_oid: int) -> bool:
         or int(row["indnatts"]) != 7
     ):
         return False
-    key_expressions = tuple(_expression_tokens(value) for value in row["key_expressions"])
-    expected_keys = (
-        ("tenant_id",),
-        ("user_id",),
-        ("agent_id",),
-        ("type",),
-        ("coalesce", "scope_service", "''", "::", "varchar"),
-        ("coalesce", "scope_env", "''", "::", "varchar"),
-        ("content_hash",),
+    key_expressions = tuple(
+        _expression_signature(value) for value in row["key_expressions"]
     )
-    return key_expressions == expected_keys and _expression_tokens(row["predicate"]) == (
-        "status",
-        "::",
-        "text",
-        "=",
-        "'active'",
-        "::",
-        "text",
+    return (
+        key_expressions == _EXPECTED_EXACT_KEY_SIGNATURES
+        and _expression_signature(row["predicate"])
+        == _EXPECTED_EXACT_PREDICATE_SIGNATURE
     )

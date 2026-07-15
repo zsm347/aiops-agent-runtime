@@ -359,6 +359,15 @@ def _acceptance_module():
     return module
 
 
+def _postgres_gate_module():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "run_memory_postgres_acceptance.py"
+    spec = spec_from_file_location("m_p2_postgres_acceptance_gate", path)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_models_freeze_exact_index_and_integrity_names() -> None:
     memory_constraints = {item.name for item in MemoryModel.__table__.constraints}
     core_constraints = {item.name for item in AgentCoreMemoryBlock.__table__.constraints}
@@ -574,6 +583,56 @@ async def test_readiness_rejects_old_schema_and_accepts_frozen_capabilities() ->
         ),
         (
             {
+                "conname": "chk_long_term_memory_active_content_hash",
+                "expression": (
+                    "status::text <> 'active'::text OR content_hash IS NOT NULL "
+                    "AND content_hash::text !~ '^[0-9a-f]{64}$'::text"
+                ),
+            },
+            "constraint",
+        ),
+        (
+            {
+                "conname": "chk_long_term_memory_active_content_hash",
+                "expression": (
+                    "status::text <> 'active'::text OR content_hash IS NOT NULL "
+                    "AND content_hash::text ~* '^[0-9a-f]{64}$'::text"
+                ),
+            },
+            "constraint",
+        ),
+        (
+            {
+                "conname": "chk_long_term_memory_active_content_hash",
+                "expression": (
+                    "status::text <> 'active'::text OR content_hash IS NOT NULL "
+                    "AND content_hash::text !~* '^[0-9a-f]{64}$'::text"
+                ),
+            },
+            "constraint",
+        ),
+        (
+            {
+                "conname": "chk_long_term_memory_active_content_hash",
+                "expression": (
+                    "(status::text <> 'active'::text OR content_hash IS NOT NULL) "
+                    "AND content_hash::text ~ '^[0-9a-f]{64}$'::text"
+                ),
+            },
+            "constraint",
+        ),
+        (
+            {
+                "conname": "chk_long_term_memory_active_content_hash",
+                "expression": (
+                    "status::text <> 'active'::text OR content_hash IS NOT NULL "
+                    "AND content_hash::text #~ '^[0-9a-f]{64}$'::text"
+                ),
+            },
+            "constraint",
+        ),
+        (
+            {
                 "conname": CORE_UNIQUE_CONSTRAINT,
                 "key_columns": [
                     "tenant_id",
@@ -597,6 +656,7 @@ async def test_readiness_rejects_old_schema_and_accepts_frozen_capabilities() ->
         ({"indisready": False}, "index"),
         ({"indnkeyatts": 8, "indnatts": 8}, "index"),
         ({"predicate": "status = 'active' OR status = 'archived'"}, "index"),
+        ({"predicate": "status::text != 'active'::text"}, "index"),
         ({"predicate": "status::name = 'active'::name"}, "index"),
         (
             {
@@ -642,6 +702,24 @@ async def test_readiness_rejects_wrong_relation_or_near_match_capability(
         await _repository(session).ensure_ready()
 
 
+@pytest.mark.asyncio
+async def test_readiness_accepts_only_redundant_expression_parentheses() -> None:
+    session = _Session(
+        results=_ready_catalog_results(
+            constraint_overrides={
+                "conname": "chk_long_term_memory_active_content_hash",
+                "expression": (
+                    "(((status)::text <> 'active'::text) OR "
+                    "((content_hash IS NOT NULL) AND "
+                    "((content_hash)::text ~ '^[0-9a-f]{64}$'::text)))"
+                ),
+            }
+        )
+    )
+
+    await _repository(session).ensure_ready()
+
+
 def test_migration_freezes_canonicalizer_names_and_single_head() -> None:
     migration = _migration_module()
 
@@ -677,6 +755,22 @@ def test_migration_rejects_malformed_existing_core_hash_before_backfill() -> Non
     backfill_position = upgrade_source.index("_backfill_core_hashes(connection)")
 
     assert reject_position < backfill_position
+
+
+def test_migration_rejects_blank_ids_before_keyset_backfills() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "20260714_01_enforce_memory_persistence.py"
+    ).read_text(encoding="utf-8")
+    upgrade_source = source[source.index("def upgrade()") :]
+
+    blank_id_position = upgrade_source.index("_reject_blank_ids(connection)")
+    assert blank_id_position < upgrade_source.index("_normalize_scopes(connection)")
+    assert blank_id_position < upgrade_source.index("_backfill_archival_hashes(connection)")
+    assert blank_id_position < upgrade_source.index("_backfill_core_hashes(connection)")
+    assert blank_id_position < upgrade_source.index("_normalize_tags(connection)")
 
 
 def test_local_deterministic_candidate_timestamps_are_valid() -> None:
@@ -723,6 +817,9 @@ def test_alembic_url_uses_settings_only_without_explicit_attribute() -> None:
         "postgresql+asyncpg://localhost/",
         "postgresql+asyncpg://localhost/empty_development",
         "postgresql+asyncpg://localhost/superbiz_agent_prod",
+        "://",
+        "not a url",
+        "postgresql+asyncpg://user:pw@host:bad/dedicated_m_p2_test",
         "postgresql+asyncpg:///dedicated_m_p2_test",
         "sqlite+aiosqlite:///dedicated_m_p2_test",
     ],
@@ -739,6 +836,24 @@ def test_destructive_postgres_guard_rejects_default_or_non_dedicated_urls(
         )
 
 
+@pytest.mark.parametrize(
+    "database_url",
+    ["://", "not a url", "postgresql+asyncpg://user:pw@host:bad/dedicated_m_p2_test"],
+)
+def test_destructive_postgres_guard_normalizes_malformed_urls(
+    database_url: str,
+) -> None:
+    acceptance = _acceptance_module()
+
+    with pytest.raises(RuntimeError, match="URL is invalid") as exc_info:
+        acceptance._validated_destructive_database_name(
+            database_url,
+            acceptance.DESTRUCTIVE_CONFIRMATION_VALUE,
+        )
+
+    assert database_url not in str(exc_info.value)
+
+
 def test_destructive_postgres_guard_requires_independent_confirmation_and_marker() -> None:
     acceptance = _acceptance_module()
     database_url = "postgresql+asyncpg://wrong-host/dedicated_m_p2_test"
@@ -752,15 +867,76 @@ def test_destructive_postgres_guard_requires_independent_confirmation_and_marker
     class SameNameNonTestConnection:
         def __init__(self) -> None:
             self.results = [expected_database, None]
+            self.statements = []
 
-        def scalar(self, _statement):
+        def scalar(self, statement):
+            self.statements.append(str(statement))
             return self.results.pop(0)
 
+    connection = SameNameNonTestConnection()
     with pytest.raises(RuntimeError, match="not marked"):
         acceptance._validate_dedicated_connection(
-            SameNameNonTestConnection(),
+            connection,
             expected_database=expected_database,
         )
+    assert "shobj_description" in connection.statements[1]
+    assert "SELECT obj_description" not in connection.statements[1]
+
+
+def test_database_url_secret_fragments_cover_reformatted_dsn(monkeypatch) -> None:
+    acceptance = _acceptance_module()
+    monkeypatch.setattr(
+        acceptance,
+        "DATABASE_URL",
+        "postgresql+asyncpg://private-user:p%40ss@private-host/dedicated_m_p2_test",
+    )
+
+    secrets = acceptance._database_url_secrets()
+
+    assert "private-user" in secrets
+    assert "p@ss" in secrets
+    assert "p%40ss" in secrets
+    assert "private-host" in secrets
+    assert "dedicated_m_p2_test" in secrets
+
+
+def test_formal_postgres_gate_returns_distinct_pending_exit_code(
+    monkeypatch,
+    capsys,
+) -> None:
+    gate = _postgres_gate_module()
+    monkeypatch.delenv("M_P2_TEST_DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        gate.pytest,
+        "main",
+        lambda _args: (_ for _ in ()).throw(
+            AssertionError("pending gate must not invoke pytest")
+        ),
+    )
+
+    assert gate.main() == 3
+    assert capsys.readouterr().out == (
+        "status=pending reason=M_P2_TEST_DATABASE_URL_missing exit_code=3\n"
+    )
+
+
+def test_formal_postgres_gate_propagates_pytest_status(monkeypatch, capsys) -> None:
+    gate = _postgres_gate_module()
+    monkeypatch.setenv(
+        "M_P2_TEST_DATABASE_URL",
+        "postgresql+asyncpg://redacted/dedicated_m_p2_test",
+    )
+    observed: list[list[str]] = []
+
+    def fake_pytest_main(args: list[str]) -> int:
+        observed.append(args)
+        return 5
+
+    monkeypatch.setattr(gate.pytest, "main", fake_pytest_main)
+
+    assert gate.main() == 5
+    assert observed == [["-q", str(gate.ACCEPTANCE_TEST), "-rs"]]
+    assert capsys.readouterr().out == "status=failed exit_code=5\n"
 
 
 @pytest.mark.asyncio
@@ -803,9 +979,14 @@ async def test_destructive_guard_failure_never_calls_alembic_downgrade(monkeypat
         {"usage_count": -1},
         {"usage_count": True},
         {"last_used_at": "invalid"},
+        {"created_at": datetime(2026, 7, 14)},
+        {"updated_at": datetime(2026, 7, 14)},
+        {"last_used_at": datetime(2026, 7, 14)},
         {"source": "memory_service"},
+        {"source": []},
         {"status": "archived"},
         {"type": "rule"},
+        {"type": []},
         {"tags": ["valid", 1]},
         {"scope_service": 1},
     ],
@@ -818,6 +999,38 @@ async def test_repository_rejects_malformed_direct_archival_inputs(
 
     with pytest.raises(MemoryStoreContractError):
         await _repository(session).write_archival_exact(_memory(**overrides))
+
+    assert session.statements == []
+
+
+@pytest.mark.asyncio
+async def test_repository_rejects_unhashable_query_filters_before_sql() -> None:
+    session = _Session()
+    repository = _repository(session)
+
+    with pytest.raises(MemoryStoreContractError):
+        await repository.list_active_memories(
+            "tenant",
+            "user",
+            "agent",
+            types=[[]],  # type: ignore[list-item]
+        )
+    with pytest.raises(MemoryStoreContractError):
+        await repository.list_core_blocks_for_scope(
+            "tenant",
+            "user",
+            "agent",
+            statuses=[[]],  # type: ignore[list-item]
+        )
+    with pytest.raises(MemoryStoreContractError):
+        await repository.cas_replace_core_content(
+            "tenant",
+            "user",
+            "agent",
+            [],  # type: ignore[arg-type]
+            "content",
+            expected_version=1,
+        )
 
     assert session.statements == []
 

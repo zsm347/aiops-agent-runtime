@@ -227,6 +227,25 @@ async def test_memory_runtime_close_waits_for_probe_and_rejects_late_readiness()
 
 
 @pytest.mark.asyncio
+async def test_memory_runtime_inflight_readiness_fails_when_close_starts() -> None:
+    repository = _ControlledRepository()
+    engine = _ControlledEngine()
+    engine.release.set()
+    _trace_store, runtime = _controlled_postgres_runtime(repository, engine)
+    readiness_waiter = asyncio.create_task(runtime.ensure_ready())
+    await repository.started.wait()
+
+    close_task = asyncio.create_task(runtime.aclose())
+    await asyncio.sleep(0)
+    repository.release.set()
+
+    with pytest.raises(RuntimeError, match="closing or closed"):
+        await readiness_waiter
+    await close_task
+    assert (repository.calls, engine.calls) == (1, 1)
+
+
+@pytest.mark.asyncio
 async def test_harness_close_waits_for_startup_probe_and_rejects_chat_after_close() -> None:
     repository = _ControlledRepository()
     engine = _ControlledEngine()
@@ -258,6 +277,31 @@ async def test_harness_close_waits_for_startup_probe_and_rejects_chat_after_clos
     )
     assert result.success is False
     assert result.error_message == "Harness service is closing or closed."
+
+
+@pytest.mark.asyncio
+async def test_harness_inflight_readiness_fails_when_close_starts() -> None:
+    repository = _ControlledRepository()
+    engine = _ControlledEngine()
+    engine.release.set()
+    trace_store, runtime = _controlled_postgres_runtime(repository, engine)
+    service = AgentHarnessService.build_default(
+        _memory_settings(memory_store_backend="postgres"),
+        trace_store=trace_store,
+        memory_runtime=runtime,
+        rag_retrieval_service=_CloseableRag(),  # type: ignore[arg-type]
+    )
+    readiness_waiter = asyncio.create_task(service.ensure_ready())
+    await repository.started.wait()
+
+    close_task = asyncio.create_task(service.aclose())
+    await asyncio.sleep(0)
+    repository.release.set()
+
+    with pytest.raises(RuntimeError, match="closing or closed"):
+        await readiness_waiter
+    await close_task
+    assert (repository.calls, engine.calls) == (1, 1)
 
 
 @pytest.mark.asyncio

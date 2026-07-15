@@ -216,6 +216,9 @@ class AgentHarnessService:
                 self._ready_task = asyncio.ensure_future(self._readiness_probe())
             task = self._ready_task
         await asyncio.shield(task)
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise RuntimeError("Harness service is closing or closed.")
 
     async def _readiness_probe(self) -> None:
         if self.memory_runtime is not None and self.memory_runtime.backend == "postgres":

@@ -17,6 +17,7 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from alembic import command
@@ -25,7 +26,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import event, text, update
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import ArgumentError, IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from superbiz_agent.config import Settings
@@ -39,6 +40,7 @@ from superbiz_agent.memory.errors import (
     MemoryStoreUnavailableError,
 )
 from superbiz_agent.memory.persistence_contract import (
+    ACTIVE_CONTENT_HASH_CHECK,
     ACTIVE_EXACT_INDEX,
     CORE_UNIQUE_CONSTRAINT,
     M_P2_REQUIRED_CHECKS,
@@ -88,6 +90,10 @@ _RAW_DRIVER_OUTPUT_MARKERS = (
     "sqlalchemy.exc",
     "traceback (most recent call last)",
     "detail:",
+)
+_DATABASE_MARKER_QUERY = text(
+    "SELECT shobj_description(oid, 'pg_database') FROM pg_database "
+    "WHERE datname = current_database()"
 )
 
 
@@ -158,6 +164,29 @@ def _database_url() -> str:
     return DATABASE_URL
 
 
+def _database_url_secrets() -> tuple[str, ...]:
+    database_url = _database_url()
+    try:
+        parsed = make_url(database_url)
+    except (ArgumentError, TypeError, ValueError):
+        return (database_url,)
+    values = [
+        database_url,
+        parsed.username,
+        str(parsed.password) if parsed.password is not None else None,
+        parsed.host,
+        parsed.database,
+    ]
+    secrets: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        for candidate in (value, quote(value, safe="")):
+            if candidate and candidate not in secrets:
+                secrets.append(candidate)
+    return tuple(secrets)
+
+
 def _validated_destructive_database_name(
     database_url: str,
     confirmation: str | None,
@@ -166,7 +195,7 @@ def _validated_destructive_database_name(
         raise RuntimeError("PostgreSQL destructive test confirmation is missing or invalid.")
     try:
         parsed = make_url(database_url)
-    except (TypeError, ValueError):
+    except (ArgumentError, TypeError, ValueError):
         raise RuntimeError("PostgreSQL destructive test URL is invalid.") from None
     database_name = (parsed.database or "").strip()
     if (
@@ -183,12 +212,7 @@ def _validated_destructive_database_name(
 
 def _validate_dedicated_connection(connection, *, expected_database: str) -> None:
     actual_database = connection.scalar(text("SELECT current_database()"))
-    marker = connection.scalar(
-        text(
-            "SELECT obj_description(oid, 'pg_database') FROM pg_database "
-            "WHERE datname = current_database()"
-        )
-    )
+    marker = connection.scalar(_DATABASE_MARKER_QUERY)
     if actual_database != expected_database or marker != DEDICATED_DATABASE_MARKER:
         raise RuntimeError("PostgreSQL database is not marked as dedicated M-P2 test-only.")
 
@@ -196,12 +220,7 @@ def _validate_dedicated_connection(connection, *, expected_database: str) -> Non
 async def _assert_dedicated_test_database(engine, *, expected_database: str) -> None:
     async with engine.connect() as connection:
         actual_database = await connection.scalar(text("SELECT current_database()"))
-        marker = await connection.scalar(
-            text(
-                "SELECT obj_description(oid, 'pg_database') FROM pg_database "
-                "WHERE datname = current_database()"
-            )
-        )
+        marker = await connection.scalar(_DATABASE_MARKER_QUERY)
     if actual_database != expected_database or marker != DEDICATED_DATABASE_MARKER:
         raise RuntimeError("PostgreSQL database is not marked as dedicated M-P2 test-only.")
 
@@ -317,6 +336,15 @@ async def _assert_database_has_no_application_data(engine) -> None:
                 )
 
 
+async def _set_database_marker(engine, *, database_name: str, marker: str) -> None:
+    quoted_database = engine.dialect.identifier_preparer.quote(database_name)
+    escaped_marker = marker.replace("'", "''")
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(f"COMMENT ON DATABASE {quoted_database} IS '{escaped_marker}'")
+        )
+
+
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def isolated_database_gate():
     expected_database = _validated_destructive_database_name(
@@ -382,6 +410,44 @@ async def test_full_upgrade_and_downgrade_change_actual_database_state(
 
 
 @pytest.mark.asyncio
+async def test_database_shared_marker_positive_and_negative_gate(clean_head) -> None:
+    expected_database = _validated_destructive_database_name(
+        _database_url(),
+        DESTRUCTIVE_CONFIRMATION,
+    )
+    await _assert_dedicated_test_database(
+        clean_head,
+        expected_database=expected_database,
+    )
+
+    marker_changed = False
+    try:
+        await _set_database_marker(
+            clean_head,
+            database_name=expected_database,
+            marker="invalid-m-p2-marker",
+        )
+        marker_changed = True
+        with pytest.raises(RuntimeError, match="not marked"):
+            await _assert_dedicated_test_database(
+                clean_head,
+                expected_database=expected_database,
+            )
+    finally:
+        if marker_changed:
+            await _set_database_marker(
+                clean_head,
+                database_name=expected_database,
+                marker=DEDICATED_DATABASE_MARKER,
+            )
+
+    await _assert_dedicated_test_database(
+        clean_head,
+        expected_database=expected_database,
+    )
+
+
+@pytest.mark.asyncio
 async def test_readiness_rejects_pre_mp2_and_passes_after_upgrade(clean_head) -> None:
     await _downgrade(PRE_M_P2_REVISION)
     pre_engine = create_engine(_database_url())
@@ -435,10 +501,21 @@ async def test_runtime_a_writes_closes_and_runtime_b_recovers(clean_head) -> Non
 async def test_two_engines_initialize_exactly_three_core_rows(clean_head) -> None:
     engine_a = create_engine(_database_url())
     engine_b = create_engine(_database_url())
-    await asyncio.gather(
-        _repository(engine_a).ensure_default_core_blocks("core-init", "user", "agent"),
-        _repository(engine_b).ensure_default_core_blocks("core-init", "user", "agent"),
-    )
+    barrier = _AsyncStartBarrier(2)
+
+    async def initialize(repository: PostgresMemoryRepository):
+        await barrier.arrive_and_wait()
+        return await repository.ensure_default_core_blocks(
+            "core-init", "user", "agent"
+        )
+
+    first_task = asyncio.create_task(initialize(_repository(engine_a)))
+    second_task = asyncio.create_task(initialize(_repository(engine_b)))
+    await barrier.wait_until_ready()
+    barrier.release()
+    first, second = await asyncio.gather(first_task, second_task)
+    assert [block.block_key for block in first] == list(DEFAULT_CORE_BLOCK_KEYS)
+    assert [block.block_key for block in second] == list(DEFAULT_CORE_BLOCK_KEYS)
     async with engine_a.connect() as connection:
         count = await connection.scalar(
             text(
@@ -965,6 +1042,36 @@ async def test_memory_constraints_core_constraints_and_index_are_distinct(clean_
                 "COALESCE(scope_env, ''), content_hash) WHERE status = 'active'",
             ),
         ),
+        (
+            "inverse-active-hash-check",
+            (
+                f"ALTER TABLE long_term_memory DROP CONSTRAINT {ACTIVE_CONTENT_HASH_CHECK}",
+                f"ALTER TABLE long_term_memory ADD CONSTRAINT {ACTIVE_CONTENT_HASH_CHECK} "
+                "CHECK (status <> 'active' OR (content_hash IS NOT NULL "
+                "AND content_hash !~ '^[0-9a-f]{64}$'))",
+            ),
+            (
+                f"ALTER TABLE long_term_memory DROP CONSTRAINT {ACTIVE_CONTENT_HASH_CHECK}",
+                f"ALTER TABLE long_term_memory ADD CONSTRAINT {ACTIVE_CONTENT_HASH_CHECK} "
+                "CHECK (status <> 'active' OR (content_hash IS NOT NULL "
+                "AND content_hash ~ '^[0-9a-f]{64}$'))",
+            ),
+        ),
+        (
+            "inverse-exact-index-predicate",
+            (
+                f"DROP INDEX {ACTIVE_EXACT_INDEX}",
+                f"CREATE UNIQUE INDEX {ACTIVE_EXACT_INDEX} ON long_term_memory "
+                "(tenant_id, user_id, agent_id, type, COALESCE(scope_service, ''), "
+                "COALESCE(scope_env, ''), content_hash) WHERE status <> 'active'",
+            ),
+            (
+                f"DROP INDEX {ACTIVE_EXACT_INDEX}",
+                f"CREATE UNIQUE INDEX {ACTIVE_EXACT_INDEX} ON long_term_memory "
+                "(tenant_id, user_id, agent_id, type, COALESCE(scope_service, ''), "
+                "COALESCE(scope_env, ''), content_hash) WHERE status = 'active'",
+            ),
+        ),
     ],
 )
 async def test_readiness_rejects_real_degraded_catalog_and_restores_it(
@@ -1044,6 +1151,8 @@ def _dirty_memory_insert(*, row_id: str, content: str, tags_json: str) -> tuple[
         ("core-version", "memory_migration_invalid_core_version"),
         ("core-max-tokens", "memory_migration_invalid_core_max_tokens"),
         ("core-hash", "memory_migration_invalid_core_hash"),
+        ("core-blank-id", "memory_migration_invalid_core_id"),
+        ("blank-id", "memory_migration_invalid_memory_id"),
     ],
 )
 async def test_dirty_migrations_fail_closed_without_marking_revision(
@@ -1055,21 +1164,29 @@ async def test_dirty_migrations_fail_closed_without_marking_revision(
 ) -> None:
     engine = clean_pre_mp2
     dirty_content = "PRIVATE-DIRTY-CONTENT"
+    protected_contents: list[str] = []
     async with engine.begin() as connection:
         if case_name.startswith("core-"):
+            core_content = f"PRIVATE-CORE-CONTENT-{case_name}"
+            protected_contents.append(core_content)
             version = 0 if case_name == "core-version" else 1
             max_tokens = 0 if case_name == "core-max-tokens" else 100
-            core_hash = "invalid" if case_name == "core-hash" else ""
+            core_hash = (
+                "invalid"
+                if case_name == "core-hash"
+                else hashlib.sha256(core_content.encode("utf-8")).hexdigest()
+            )
             await connection.execute(
                 text(
                     "INSERT INTO agent_core_memory_block "
                     "(id, tenant_id, user_id, agent_id, block_key, description, content, "
                     "max_tokens, version, read_only, source, content_hash, status) VALUES "
-                    "(:id, 'dirty', 'user', 'agent', 'user_rules', 'rules', '', :max_tokens, "
-                    ":version, false, 'memory_service', :hash, 'active')"
+                    "(:id, 'dirty', 'user', 'agent', 'user_rules', 'rules', :content, "
+                    ":max_tokens, :version, false, 'memory_service', :hash, 'active')"
                 ),
                 {
-                    "id": str(uuid4()),
+                    "id": "" if case_name == "core-blank-id" else str(uuid4()),
+                    "content": core_content,
                     "max_tokens": max_tokens,
                     "version": version,
                     "hash": core_hash,
@@ -1086,9 +1203,12 @@ async def test_dirty_migrations_fail_closed_without_marking_revision(
                 tags_json = "[1]"
             elif case_name == "active-duplicates":
                 contents = [dirty_content, dirty_content]
+            protected_contents.extend(contents)
             for content in contents:
                 statement, params = _dirty_memory_insert(
-                    row_id=str(uuid4()), content=content, tags_json=tags_json
+                    row_id="" if case_name == "blank-id" else str(uuid4()),
+                    content=content,
+                    tags_json=tags_json,
                 )
                 await connection.execute(statement, params)
 
@@ -1114,7 +1234,7 @@ async def test_dirty_migrations_fail_closed_without_marking_revision(
         captured.out,
         captured.err,
         captured_logs,
-        secrets=(dirty_content, _database_url()),
+        secrets=tuple(dict.fromkeys(protected_contents)) + _database_url_secrets(),
     )
     if unexpected_error:
         pytest.fail("Migration failure escaped its safe contract error.")
@@ -1228,10 +1348,20 @@ def _assert_subprocess_succeeded(process: subprocess.CompletedProcess[str]) -> N
     _assert_no_sensitive_or_driver_output(
         process.stdout,
         process.stderr,
-        secrets=(_database_url(),),
+        secrets=_database_url_secrets(),
     )
     if process.returncode != 0:
         pytest.fail("PostgreSQL acceptance subprocess failed without exposing its output.")
+
+
+def _subprocess_json(process: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError:
+        pytest.fail("PostgreSQL subprocess returned invalid JSON.")
+    if not isinstance(payload, dict):
+        pytest.fail("PostgreSQL subprocess returned a non-object JSON payload.")
+    return payload
 
 
 @pytest.mark.asyncio
@@ -1247,12 +1377,16 @@ async def test_os_subprocess_concurrency_and_cross_process_recovery(
     first, second = await asyncio.gather(first_task, second_task)
     _assert_subprocess_succeeded(first)
     _assert_subprocess_succeeded(second)
+    writer_payloads = [_subprocess_json(first), _subprocess_json(second)]
+    if any(set(payload) != {"status"} for payload in writer_payloads):
+        pytest.fail("PostgreSQL writer subprocess returned an unexpected JSON shape.")
+    assert sorted(payload["status"] for payload in writer_payloads) == [
+        "duplicate_skipped",
+        "written",
+    ]
     recovered = await _child("read", "unused")
     _assert_subprocess_succeeded(recovered)
-    try:
-        payload = json.loads(recovered.stdout)
-    except json.JSONDecodeError:
-        pytest.fail("PostgreSQL recovery subprocess returned invalid JSON.")
+    payload = _subprocess_json(recovered)
     assert payload == {"count": 1, "tags": ["process-a", "process-b"]}
 
 

@@ -68,6 +68,9 @@ class MemoryRuntimeComponents:
                 self._ready_task = asyncio.create_task(self.repository.ensure_ready())
             task = self._ready_task
         await asyncio.shield(task)
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise RuntimeError("Long-term memory runtime is closing or closed.")
 
     async def aclose(self) -> None:
         """Dispose a PostgreSQL engine; a no-op for the in-memory backend."""

@@ -1,8 +1,9 @@
 """M-P2 acceptance contracts against one explicitly supplied isolated PostgreSQL DB.
 
-The module reads only ``M_P2_TEST_DATABASE_URL``.  It never constructs Settings
-without ``_env_file=None``.  Without the variable every test is skipped and the
-PostgreSQL gate remains pending; skips are not acceptance passes.
+The module reads only the explicit URL and independent destructive-confirmation
+gate variables. It never constructs Settings without ``_env_file=None``. Without
+the URL every test is skipped and the PostgreSQL gate remains pending; skips are
+not acceptance passes.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from superbiz_agent.memory.persistence_contract import (
     ACTIVE_EXACT_INDEX,
     CORE_UNIQUE_CONSTRAINT,
     M_P2_REQUIRED_CHECKS,
+    SCOPE_ENV_NONBLANK_CHECK,
 )
 from superbiz_agent.memory.runtime import build_memory_runtime
 from superbiz_agent.memory.schemas import DEFAULT_CORE_BLOCK_KEYS, LongTermMemory, utc_now
@@ -58,6 +60,7 @@ from superbiz_agent.tools.builtin import build_builtin_tools
 
 
 DATABASE_URL = os.environ.get("M_P2_TEST_DATABASE_URL")
+DESTRUCTIVE_CONFIRMATION = os.environ.get("M_P2_TEST_DATABASE_DESTRUCTIVE_CONFIRM")
 PENDING_REASON = (
     "PostgreSQL acceptance pending: M_P2_TEST_DATABASE_URL is not set to an "
     "explicit isolated test database."
@@ -68,6 +71,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_DIR = ROOT / "alembic"
 PRE_M_P2_REVISION = "20260712_01"
 HEAD_REVISION = "20260714_01"
+DESTRUCTIVE_CONFIRMATION_VALUE = "ERASE_M_P2_ISOLATED_TEST_DATABASE"
+DEDICATED_DATABASE_MARKER = "superbiz-agent:m-p2-destructive-test-database:v1"
+_DEFAULT_OR_PRODUCTION_DATABASE_NAMES = frozenset(
+    {"postgres", "template0", "template1", "super_biz_agent", "superbiz_agent"}
+)
 _APPLICATION_TABLES = (
     "agent_rollout_event",
     "long_term_memory",
@@ -75,11 +83,127 @@ _APPLICATION_TABLES = (
     "rag_knowledge_base",
     "rag_document",
 )
+_RAW_DRIVER_OUTPUT_MARKERS = (
+    "asyncpg",
+    "sqlalchemy.exc",
+    "traceback (most recent call last)",
+    "detail:",
+)
+
+
+class _AsyncStartBarrier:
+    def __init__(self, parties: int) -> None:
+        self._parties = parties
+        self._arrived = 0
+        self._lock = asyncio.Lock()
+        self._all_ready = asyncio.Event()
+        self._start = asyncio.Event()
+
+    async def arrive_and_wait(self) -> None:
+        async with self._lock:
+            self._arrived += 1
+            if self._arrived == self._parties:
+                self._all_ready.set()
+        await self._start.wait()
+
+    async def wait_until_ready(self) -> None:
+        await asyncio.wait_for(self._all_ready.wait(), timeout=10)
+
+    def release(self) -> None:
+        self._start.set()
+
+
+def _assert_no_sensitive_or_driver_output(
+    *surfaces: str,
+    secrets: tuple[str, ...] = (),
+) -> None:
+    combined = "\n".join(surfaces)
+    if any(secret and secret in combined for secret in secrets):
+        pytest.fail("PostgreSQL acceptance output exposed protected input.")
+    lowered = combined.lower()
+    if any(marker in lowered for marker in _RAW_DRIVER_OUTPUT_MARKERS):
+        pytest.fail("PostgreSQL acceptance output exposed raw driver diagnostics.")
+
+
+async def _raw_memory_rows(engine, *, tenant_id: str) -> list[dict[str, Any]]:
+    async with engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                text(
+                    "SELECT * FROM long_term_memory "
+                    "WHERE tenant_id=:tenant_id ORDER BY id"
+                ),
+                {"tenant_id": tenant_id},
+            )
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+async def _raw_core_rows(engine, *, tenant_id: str) -> list[dict[str, Any]]:
+    async with engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                text(
+                    "SELECT * FROM agent_core_memory_block "
+                    "WHERE tenant_id=:tenant_id ORDER BY id"
+                ),
+                {"tenant_id": tenant_id},
+            )
+        ).mappings().all()
+    return [dict(row) for row in rows]
 
 
 def _database_url() -> str:
     assert DATABASE_URL is not None
     return DATABASE_URL
+
+
+def _validated_destructive_database_name(
+    database_url: str,
+    confirmation: str | None,
+) -> str:
+    if confirmation != DESTRUCTIVE_CONFIRMATION_VALUE:
+        raise RuntimeError("PostgreSQL destructive test confirmation is missing or invalid.")
+    try:
+        parsed = make_url(database_url)
+    except (TypeError, ValueError):
+        raise RuntimeError("PostgreSQL destructive test URL is invalid.") from None
+    database_name = (parsed.database or "").strip()
+    if (
+        parsed.get_backend_name() != "postgresql"
+        or parsed.get_driver_name() != "asyncpg"
+        or not parsed.host
+        or not database_name
+        or database_name.lower() in _DEFAULT_OR_PRODUCTION_DATABASE_NAMES
+        or "m_p2_test" not in database_name.lower()
+    ):
+        raise RuntimeError("PostgreSQL destructive test URL is not dedicated-test-only.")
+    return database_name
+
+
+def _validate_dedicated_connection(connection, *, expected_database: str) -> None:
+    actual_database = connection.scalar(text("SELECT current_database()"))
+    marker = connection.scalar(
+        text(
+            "SELECT obj_description(oid, 'pg_database') FROM pg_database "
+            "WHERE datname = current_database()"
+        )
+    )
+    if actual_database != expected_database or marker != DEDICATED_DATABASE_MARKER:
+        raise RuntimeError("PostgreSQL database is not marked as dedicated M-P2 test-only.")
+
+
+async def _assert_dedicated_test_database(engine, *, expected_database: str) -> None:
+    async with engine.connect() as connection:
+        actual_database = await connection.scalar(text("SELECT current_database()"))
+        marker = await connection.scalar(
+            text(
+                "SELECT obj_description(oid, 'pg_database') FROM pg_database "
+                "WHERE datname = current_database()"
+            )
+        )
+    if actual_database != expected_database or marker != DEDICATED_DATABASE_MARKER:
+        raise RuntimeError("PostgreSQL database is not marked as dedicated M-P2 test-only.")
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -98,25 +222,31 @@ def _settings(**overrides: Any) -> Settings:
 
 
 def _alembic_config() -> Config:
+    expected_database = _validated_destructive_database_name(
+        _database_url(),
+        DESTRUCTIVE_CONFIRMATION,
+    )
     config = Config()
     config.set_main_option("script_location", str(ALEMBIC_DIR))
     config.attributes[EXPLICIT_DATABASE_URL_ATTRIBUTE] = _database_url()
-    expected_database = make_url(_database_url()).database
 
     def validate_connection(connection) -> None:
-        actual_database = connection.scalar(text("SELECT current_database()"))
-        if actual_database != expected_database:
-            raise RuntimeError("Alembic connected to an unexpected database.")
+        _validate_dedicated_connection(
+            connection,
+            expected_database=expected_database,
+        )
 
     config.attributes[CONNECTION_VALIDATOR_ATTRIBUTE] = validate_connection
     return config
 
 
 async def _upgrade(revision: str = "head") -> None:
+    _validated_destructive_database_name(_database_url(), DESTRUCTIVE_CONFIRMATION)
     await asyncio.to_thread(command.upgrade, _alembic_config(), revision)
 
 
 async def _downgrade(revision: str) -> None:
+    _validated_destructive_database_name(_database_url(), DESTRUCTIVE_CONFIRMATION)
     await asyncio.to_thread(command.downgrade, _alembic_config(), revision)
 
 
@@ -189,7 +319,15 @@ async def _assert_database_has_no_application_data(engine) -> None:
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def isolated_database_gate():
+    expected_database = _validated_destructive_database_name(
+        _database_url(),
+        DESTRUCTIVE_CONFIRMATION,
+    )
     engine = create_engine(_database_url())
+    await _assert_dedicated_test_database(
+        engine,
+        expected_database=expected_database,
+    )
     await _assert_database_has_no_application_data(engine)
     await engine.dispose()
     await _downgrade("base")
@@ -345,8 +483,10 @@ async def test_archived_default_rolls_back_missing_default_inserts(clean_head) -
 @pytest.mark.asyncio
 async def test_twenty_four_concurrent_exact_writes_merge_all_tags(clean_head) -> None:
     repository = _repository(clean_head)
+    barrier = _AsyncStartBarrier(24)
 
     async def write_one(index: int):
+        await barrier.arrive_and_wait()
         return await repository.write_archival_exact(
             _archival(
                 "exact-24",
@@ -358,7 +498,10 @@ async def test_twenty_four_concurrent_exact_writes_merge_all_tags(clean_head) ->
             )
         )
 
-    results = await asyncio.gather(*(write_one(index) for index in range(24)))
+    tasks = [asyncio.create_task(write_one(index)) for index in range(24)]
+    await barrier.wait_until_ready()
+    barrier.release()
+    results = await asyncio.gather(*tasks)
     rows = await repository.list_active_memories("exact-24", "user", "agent")
     assert sum(result.status == "written" for result in results) == 1
     assert len(rows) == 1
@@ -376,8 +519,9 @@ async def test_exact_and_unrelated_primary_key_conflict_is_unresolved(clean_head
     )
     await repository.write_archival_exact(exact)
     await repository.write_archival_exact(unrelated)
+    before = await _raw_memory_rows(clean_head, tenant_id="pk-conflict")
 
-    with pytest.raises(MemoryExactConflictUnresolvedError):
+    try:
         await repository.write_archival_exact(
             _archival(
                 "pk-conflict",
@@ -387,6 +531,21 @@ async def test_exact_and_unrelated_primary_key_conflict_is_unresolved(clean_head
                 content="same",
             )
         )
+    except MemoryExactConflictUnresolvedError as exc:
+        conflict_message = str(exc)
+    except Exception:
+        raise AssertionError(
+            "Primary-key/exact conflict escaped its safe contract error."
+        ) from None
+    else:
+        pytest.fail("Primary-key/exact conflict unexpectedly succeeded.")
+    _assert_no_sensitive_or_driver_output(
+        conflict_message,
+        secrets=("exact-row", "occupied-id", "same", "other"),
+    )
+    after = await _raw_memory_rows(clean_head, tenant_id="pk-conflict")
+    if after != before:
+        pytest.fail("Primary-key/exact conflict changed persisted rows.")
 
 
 @pytest.mark.asyncio
@@ -401,14 +560,19 @@ async def test_concurrent_core_cas_contracts(clean_head, targets, expected_statu
     repository_a = _repository(engine_a)
     repository_b = _repository(engine_b)
     await repository_a.ensure_default_core_blocks("cas", "user", "agent")
-    first, second = await asyncio.gather(
-        repository_a.cas_replace_core_content(
-            "cas", "user", "agent", "user_rules", targets[0], expected_version=1
-        ),
-        repository_b.cas_replace_core_content(
-            "cas", "user", "agent", "user_rules", targets[1], expected_version=1
-        ),
-    )
+    barrier = _AsyncStartBarrier(2)
+
+    async def replace(repository, target):
+        await barrier.arrive_and_wait()
+        return await repository.cas_replace_core_content(
+            "cas", "user", "agent", "user_rules", target, expected_version=1
+        )
+
+    first_task = asyncio.create_task(replace(repository_a, targets[0]))
+    second_task = asyncio.create_task(replace(repository_b, targets[1]))
+    await barrier.wait_until_ready()
+    barrier.release()
+    first, second = await asyncio.gather(first_task, second_task)
     assert {first.status, second.status} == expected_statuses
     await asyncio.gather(engine_a.dispose(), engine_b.dispose())
 
@@ -469,6 +633,7 @@ async def test_full_identity_type_and_scope_isolation(clean_head) -> None:
         ("tenant-a", "user", "agent", "knowledge", None, None),
         ("tenant-a", "user", "agent", "experience", "svc", "prod"),
     ]
+    written_ids: set[str] = set()
     for tenant, user, agent, memory_type, service, env in variants:
         result = await repository.write_archival_exact(
             _archival(
@@ -482,7 +647,40 @@ async def test_full_identity_type_and_scope_isolation(clean_head) -> None:
             )
         )
         assert result.status == "written"
-    assert len(await repository.list_active_memories("tenant-a", "user", "agent")) == 3
+        written_ids.add(result.memory.id)
+
+    expected_counts = {
+        ("tenant-a", "user", "agent"): 3,
+        ("tenant-b", "user", "agent"): 1,
+        ("tenant-a", "other-user", "agent"): 1,
+        ("tenant-a", "user", "other-agent"): 1,
+    }
+    observed_ids: set[str] = set()
+    for identity, expected_count in expected_counts.items():
+        rows = await repository.list_active_memories(*identity)
+        assert len(rows) == expected_count
+        assert all(
+            (row.tenant_id, row.user_id, row.agent_id) == identity for row in rows
+        )
+        observed_ids.update(row.id for row in rows)
+    assert observed_ids == written_ids
+
+    knowledge = await repository.list_active_memories(
+        "tenant-a", "user", "agent", types=["knowledge"]
+    )
+    scoped = await repository.list_active_memories(
+        "tenant-a",
+        "user",
+        "agent",
+        scope_service="svc",
+        scope_env="prod",
+    )
+    assert [(row.type, row.scope_service, row.scope_env) for row in knowledge] == [
+        ("knowledge", None, None)
+    ]
+    assert [(row.type, row.scope_service, row.scope_env) for row in scoped] == [
+        ("experience", "svc", "prod")
+    ]
 
 
 @pytest.mark.asyncio
@@ -497,10 +695,21 @@ async def test_archived_exact_row_does_not_block_new_active(clean_head) -> None:
             .where(MemoryModel.id == first.memory.id)
             .values(status="archived")
         )
+    archived_before = (
+        await _raw_memory_rows(clean_head, tenant_id="archived")
+    )[0]
     second = await repository.write_archival_exact(
         _archival("archived", "user", "agent", content="reusable content")
     )
     assert second.status == "written"
+    assert second.memory.id != first.memory.id
+    rows = await _raw_memory_rows(clean_head, tenant_id="archived")
+    archived_after = next(row for row in rows if row["id"] == first.memory.id)
+    active_after = next(row for row in rows if row["id"] == second.memory.id)
+    if archived_after != archived_before:
+        pytest.fail("Writing a replacement changed the archived exact row.")
+    assert active_after["status"] == "active"
+    assert active_after["content_hash"] == archived_after["content_hash"]
 
 
 @pytest.mark.asyncio
@@ -509,12 +718,18 @@ async def test_usage_count_has_no_lost_increment(clean_head) -> None:
     written = await repository.write_archival_exact(
         _archival("usage", "user", "agent", content="usage content")
     )
-    await asyncio.gather(
-        *(
-            repository.mark_returned("usage", "user", "agent", [written.memory.id])
-            for _ in range(24)
+    barrier = _AsyncStartBarrier(24)
+
+    async def increment_once() -> None:
+        await barrier.arrive_and_wait()
+        await repository.mark_returned(
+            "usage", "user", "agent", [written.memory.id]
         )
-    )
+
+    tasks = [asyncio.create_task(increment_once()) for _ in range(24)]
+    await barrier.wait_until_ready()
+    barrier.release()
+    await asyncio.gather(*tasks)
     row = (await repository.list_active_memories("usage", "user", "agent"))[0]
     assert row.usage_count == 24
 
@@ -532,14 +747,33 @@ async def test_local_deterministic_dimensions_write_null(clean_head) -> None:
         rows = (
             await connection.execute(
                 text(
-                    "SELECT id, embedding IS NULL, embedding_dimension "
+                    "SELECT id, embedding IS NULL AS embedding_is_null, "
+                    "embedding_model, embedding_dimension, embedding_metric, "
+                    "embedding_version "
                     "FROM long_term_memory WHERE id IN (:first, :second) ORDER BY id"
                 ),
                 {"first": first.memory.id, "second": second.memory.id},
             )
-        ).all()
-    assert {row[2] for row in rows} == {17, 64}
-    assert all(row[1] is True for row in rows)
+        ).mappings().all()
+    by_id = {str(row["id"]): dict(row) for row in rows}
+    assert by_id == {
+        first.memory.id: {
+            "id": first.memory.id,
+            "embedding_is_null": True,
+            "embedding_model": "local-deterministic",
+            "embedding_dimension": 64,
+            "embedding_metric": "cosine",
+            "embedding_version": "local-64",
+        },
+        second.memory.id: {
+            "id": second.memory.id,
+            "embedding_is_null": True,
+            "embedding_model": "local-deterministic",
+            "embedding_dimension": 17,
+            "embedding_metric": "cosine",
+            "embedding_version": "local-17",
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -547,27 +781,43 @@ async def test_existing_vector_survives_scalar_read_merge_and_core_write(clean_h
     vector_text = "[" + ",".join("0" for _ in range(1024)) + "]"
     memory_id = str(uuid4())
     content = "vector preservation"
+    created_at = utc_now()
     async with clean_head.begin() as connection:
         await connection.execute(
             text(
                 "INSERT INTO long_term_memory "
-                "(id, tenant_id, user_id, agent_id, type, topic, content, source, embedding, "
+                "(id, tenant_id, user_id, agent_id, session_id, type, topic, content, "
+                "source, embedding, "
                 "embedding_model, embedding_dimension, embedding_metric, embedding_version, "
-                "tags, content_hash, status) VALUES "
-                "(:id, 'vector', 'user', 'agent', 'experience', 'topic', :content, 'manual', "
+                "created_at, updated_at, usage_count, last_used_at, tags, content_hash, status) "
+                "VALUES (:id, 'vector', 'user', 'agent', 'original-session', 'experience', "
+                "'original-topic', :content, 'rollout', "
                 "CAST(:embedding AS vector), 'provider-model', 1024, 'cosine', 'v1', "
-                "'[\"old\"]'::jsonb, :hash, 'active')"
+                ":created_at, :created_at, 7, :created_at, '[\"old\"]'::jsonb, :hash, "
+                "'active')"
             ),
             {
                 "id": memory_id,
                 "content": content,
                 "embedding": vector_text,
                 "hash": canonical_content_hash(content),
+                "created_at": created_at,
             },
         )
-        before = await connection.scalar(
-            text("SELECT embedding::text FROM long_term_memory WHERE id=:id"),
-            {"id": memory_id},
+        before = dict(
+            (
+                await connection.execute(
+                    text(
+                        "SELECT id, tenant_id, user_id, agent_id, session_id, type, topic, "
+                        "content, source, embedding::text AS embedding, embedding_model, "
+                        "embedding_dimension, embedding_metric, embedding_version, created_at, "
+                        "updated_at, usage_count, last_used_at, status, archived_at, "
+                        "archive_reason, tags, scope_service, scope_env, content_hash "
+                        "FROM long_term_memory WHERE id=:id"
+                    ),
+                    {"id": memory_id},
+                )
+            ).mappings().one()
         )
     repository = _repository(clean_head)
     await repository.list_active_memories("vector", "user", "agent")
@@ -579,11 +829,32 @@ async def test_existing_vector_survives_scalar_read_merge_and_core_write(clean_h
         "vector", "user", "agent", "user_rules", "core", expected_version=1
     )
     async with clean_head.connect() as connection:
-        after = await connection.scalar(
-            text("SELECT embedding::text FROM long_term_memory WHERE id=:id"),
-            {"id": memory_id},
+        after = dict(
+            (
+                await connection.execute(
+                    text(
+                        "SELECT id, tenant_id, user_id, agent_id, session_id, type, topic, "
+                        "content, source, embedding::text AS embedding, embedding_model, "
+                        "embedding_dimension, embedding_metric, embedding_version, created_at, "
+                        "updated_at, usage_count, last_used_at, status, archived_at, "
+                        "archive_reason, tags, scope_service, scope_env, content_hash "
+                        "FROM long_term_memory WHERE id=:id"
+                    ),
+                    {"id": memory_id},
+                )
+            ).mappings().one()
         )
-    assert after == before
+    before_without_merge_fields = {
+        key: value for key, value in before.items() if key not in {"tags", "updated_at"}
+    }
+    after_without_merge_fields = {
+        key: value for key, value in after.items() if key not in {"tags", "updated_at"}
+    }
+    if after_without_merge_fields != before_without_merge_fields:
+        pytest.fail("Scalar/Core operations changed preserved vector-row metadata.")
+    assert before["tags"] == ["old"]
+    assert after["tags"] == ["old", "new"]
+    assert after["updated_at"] >= before["updated_at"]
 
 
 @pytest.mark.asyncio
@@ -636,6 +907,88 @@ async def test_memory_constraints_core_constraints_and_index_are_distinct(clean_
     ]
     assert CORE_UNIQUE_CONSTRAINT in by_table["agent_core_memory_block"]
     assert index_flags == (True, True, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case_name", "drift_sql", "restore_sql"),
+    [
+        (
+            "not-validated-check",
+            (
+                f"ALTER TABLE long_term_memory DROP CONSTRAINT {SCOPE_ENV_NONBLANK_CHECK}",
+                f"ALTER TABLE long_term_memory ADD CONSTRAINT {SCOPE_ENV_NONBLANK_CHECK} "
+                "CHECK (scope_env IS NULL OR btrim(scope_env) <> '') NOT VALID",
+            ),
+            (
+                f"ALTER TABLE long_term_memory DROP CONSTRAINT {SCOPE_ENV_NONBLANK_CHECK}",
+                f"ALTER TABLE long_term_memory ADD CONSTRAINT {SCOPE_ENV_NONBLANK_CHECK} "
+                "CHECK (scope_env IS NULL OR btrim(scope_env) <> '')",
+            ),
+        ),
+        (
+            "deferrable-core-unique",
+            (
+                f"ALTER TABLE agent_core_memory_block DROP CONSTRAINT {CORE_UNIQUE_CONSTRAINT}",
+                f"ALTER TABLE agent_core_memory_block ADD CONSTRAINT {CORE_UNIQUE_CONSTRAINT} "
+                "UNIQUE (tenant_id, user_id, agent_id, block_key) DEFERRABLE INITIALLY IMMEDIATE",
+            ),
+            (
+                f"ALTER TABLE agent_core_memory_block DROP CONSTRAINT {CORE_UNIQUE_CONSTRAINT}",
+                f"ALTER TABLE agent_core_memory_block ADD CONSTRAINT {CORE_UNIQUE_CONSTRAINT} "
+                "UNIQUE (tenant_id, user_id, agent_id, block_key) NOT DEFERRABLE",
+            ),
+        ),
+        (
+            "nullable-core-hash",
+            (
+                "ALTER TABLE agent_core_memory_block ALTER COLUMN content_hash DROP NOT NULL",
+            ),
+            (
+                "ALTER TABLE agent_core_memory_block ALTER COLUMN content_hash SET NOT NULL",
+            ),
+        ),
+        (
+            "wrong-exact-index-cast",
+            (
+                f"DROP INDEX {ACTIVE_EXACT_INDEX}",
+                f"CREATE UNIQUE INDEX {ACTIVE_EXACT_INDEX} ON long_term_memory "
+                "(tenant_id, user_id, agent_id, type, "
+                "COALESCE(scope_service::text, ''::text), "
+                "COALESCE(scope_env::text, ''::text), content_hash) "
+                "WHERE status = 'active'",
+            ),
+            (
+                f"DROP INDEX {ACTIVE_EXACT_INDEX}",
+                f"CREATE UNIQUE INDEX {ACTIVE_EXACT_INDEX} ON long_term_memory "
+                "(tenant_id, user_id, agent_id, type, COALESCE(scope_service, ''), "
+                "COALESCE(scope_env, ''), content_hash) WHERE status = 'active'",
+            ),
+        ),
+    ],
+)
+async def test_readiness_rejects_real_degraded_catalog_and_restores_it(
+    clean_head,
+    case_name: str,
+    drift_sql: tuple[str, ...],
+    restore_sql: tuple[str, ...],
+) -> None:
+    drift_applied = False
+    try:
+        async with clean_head.begin() as connection:
+            for statement in drift_sql:
+                await connection.execute(text(statement))
+        drift_applied = True
+
+        with pytest.raises(MemoryStoreContractError):
+            await _repository(clean_head).ensure_ready()
+    finally:
+        if drift_applied:
+            async with clean_head.begin() as connection:
+                for statement in restore_sql:
+                    await connection.execute(text(statement))
+
+    await _repository(clean_head).ensure_ready()
 
 
 @pytest.mark.asyncio
@@ -697,6 +1050,8 @@ async def test_dirty_migrations_fail_closed_without_marking_revision(
     clean_pre_mp2,
     case_name: str,
     expected_code: str,
+    caplog,
+    capsys,
 ) -> None:
     engine = clean_pre_mp2
     dirty_content = "PRIVATE-DIRTY-CONTENT"
@@ -737,15 +1092,42 @@ async def test_dirty_migrations_fail_closed_without_marking_revision(
                 )
                 await connection.execute(statement, params)
 
-    with pytest.raises(RuntimeError) as exc_info:
+    memory_before = await _raw_memory_rows(engine, tenant_id="dirty")
+    core_before = await _raw_core_rows(engine, tenant_id="dirty")
+    caplog.clear()
+    capsys.readouterr()
+    unexpected_error = False
+    try:
         await _upgrade("head")
-    message = str(exc_info.value)
-    assert expected_code in message
-    assert dirty_content not in message
+    except RuntimeError as exc:
+        message = str(exc)
+    except Exception:
+        message = ""
+        unexpected_error = True
+    else:
+        pytest.fail("Dirty migration unexpectedly succeeded.")
+    captured = capsys.readouterr()
+    captured_logs = caplog.text
+    caplog.clear()
+    _assert_no_sensitive_or_driver_output(
+        message,
+        captured.out,
+        captured.err,
+        captured_logs,
+        secrets=(dirty_content, _database_url()),
+    )
+    if unexpected_error:
+        pytest.fail("Migration failure escaped its safe contract error.")
+    if expected_code not in message:
+        pytest.fail("Migration failed without its stable contract error code.")
     async with engine.connect() as connection:
         assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == (
             PRE_M_P2_REVISION
         )
+    memory_after = await _raw_memory_rows(engine, tenant_id="dirty")
+    core_after = await _raw_core_rows(engine, tenant_id="dirty")
+    if memory_after != memory_before or core_after != core_before:
+        pytest.fail("Failed migration changed dirty source rows.")
 
 
 @pytest.mark.asyncio
@@ -769,6 +1151,7 @@ _CHILD_SCRIPT = r"""
 import asyncio
 import json
 import os
+from pathlib import Path
 import sys
 from uuid import uuid4
 
@@ -780,9 +1163,14 @@ from superbiz_agent.persistence.repositories.memory import PostgresMemoryReposit
 async def main():
     url = os.environ['M_P2_TEST_DATABASE_URL']
     mode, tag = sys.argv[1], sys.argv[2]
+    barrier_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else None
     engine = create_engine(url)
     repository = PostgresMemoryRepository(create_sessionmaker(engine))
     if mode == 'write':
+        if barrier_dir is not None:
+            (barrier_dir / f'ready-{tag}').touch()
+            while not (barrier_dir / 'go').exists():
+                await asyncio.sleep(0.01)
         content = 'subprocess persistence'
         now = utc_now()
         result = await repository.write_archival_exact(LongTermMemory(
@@ -804,14 +1192,21 @@ asyncio.run(main())
 """
 
 
-async def _child(mode: str, tag: str) -> subprocess.CompletedProcess[str]:
+async def _child(
+    mode: str,
+    tag: str,
+    barrier_dir: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     environment = {
         "M_P2_TEST_DATABASE_URL": _database_url(),
         "PYTHONPATH": str(ROOT / "src"),
     }
+    command_line = [sys.executable, "-c", _CHILD_SCRIPT, mode, tag]
+    if barrier_dir is not None:
+        command_line.append(str(barrier_dir))
     return await asyncio.to_thread(
         subprocess.run,
-        [sys.executable, "-c", _CHILD_SCRIPT, mode, tag],
+        command_line,
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -821,17 +1216,43 @@ async def _child(mode: str, tag: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.asyncio
-async def test_os_subprocess_concurrency_and_cross_process_recovery(clean_head) -> None:
-    first, second = await asyncio.gather(
-        _child("write", "process-a"),
-        _child("write", "process-b"),
+async def _wait_for_subprocess_writers(barrier_dir: Path, tags: tuple[str, ...]) -> None:
+    async def wait_until_ready() -> None:
+        while not all((barrier_dir / f"ready-{tag}").exists() for tag in tags):
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(wait_until_ready(), timeout=10)
+
+
+def _assert_subprocess_succeeded(process: subprocess.CompletedProcess[str]) -> None:
+    _assert_no_sensitive_or_driver_output(
+        process.stdout,
+        process.stderr,
+        secrets=(_database_url(),),
     )
-    assert first.returncode == 0
-    assert second.returncode == 0
+    if process.returncode != 0:
+        pytest.fail("PostgreSQL acceptance subprocess failed without exposing its output.")
+
+
+@pytest.mark.asyncio
+async def test_os_subprocess_concurrency_and_cross_process_recovery(
+    clean_head,
+    tmp_path: Path,
+) -> None:
+    tags = ("process-a", "process-b")
+    first_task = asyncio.create_task(_child("write", tags[0], tmp_path))
+    second_task = asyncio.create_task(_child("write", tags[1], tmp_path))
+    await _wait_for_subprocess_writers(tmp_path, tags)
+    (tmp_path / "go").touch()
+    first, second = await asyncio.gather(first_task, second_task)
+    _assert_subprocess_succeeded(first)
+    _assert_subprocess_succeeded(second)
     recovered = await _child("read", "unused")
-    assert recovered.returncode == 0
-    payload = json.loads(recovered.stdout)
+    _assert_subprocess_succeeded(recovered)
+    try:
+        payload = json.loads(recovered.stdout)
+    except json.JSONDecodeError:
+        pytest.fail("PostgreSQL recovery subprocess returned invalid JSON.")
     assert payload == {"count": 1, "tags": ["process-a", "process-b"]}
 
 

@@ -11,7 +11,9 @@ from superbiz_agent.evals.memory_fixtures import (
     MemoryFixtureSeeder,
 )
 from superbiz_agent.evals.memory_snapshots import MemorySnapshotProvider
-from superbiz_agent.harness.context import AgentRequestContext
+from superbiz_agent.harness.context import AgentRequestContext, RunContext
+from superbiz_agent.memory.errors import CoreMemoryContractError, MemoryStoreIsolationError
+from superbiz_agent.memory.schemas import CORE_BLOCK_SPECS, CoreMemoryBlock
 from superbiz_agent.harness.service import AgentHarnessService
 from superbiz_agent.harness.trace_store import InMemoryRolloutEventStore
 from superbiz_agent.memory.runtime import build_memory_runtime
@@ -253,8 +255,111 @@ async def test_core_update_requires_snapshot_advances_version_and_cleans_up() ->
     assert second.result["version"] == 3
     assert runtime.core_version_snapshots.contains(run_context.run_id)
     await service.runtime.complete_run(run_context, "done")
+    assert not runtime.core_version_snapshots.contains(run_context.run_id)
+
+
+@pytest.mark.asyncio
+async def test_fail_run_and_duplicate_cleanup_release_core_snapshot() -> None:
+    trace_store, runtime = _runtime()
+    service = AgentHarnessService.build_default(
+        _settings(),
+        model_gateway=StubModelGateway(),
+        trace_store=trace_store,
+        memory_runtime=runtime,
+    )
+    run_context = await service.runtime.start_run(
+        AgentRequestContext("tenant", "user", "agent", "failed-run")
+    )
+    await service.runtime.assemble_context(run_context, "读取 Core Memory")
+    assert runtime.core_version_snapshots.contains(run_context.run_id)
+
+    await service.runtime.fail_run(run_context, "failed")
+    assert not runtime.core_version_snapshots.contains(run_context.run_id)
+    service.runtime.cleanup_run(run_context.run_id)
     service.runtime.cleanup_run(run_context.run_id)
     assert not runtime.core_version_snapshots.contains(run_context.run_id)
+
+
+@pytest.mark.asyncio
+async def test_context_assembly_error_releases_snapshot_without_test_cleanup() -> None:
+    trace_store, runtime = _runtime()
+    service = AgentHarnessService.build_default(
+        _settings(),
+        model_gateway=StubModelGateway(),
+        trace_store=trace_store,
+        memory_runtime=runtime,
+    )
+    provider = service.runtime.context_manager.memory_context_provider
+    assert provider is not None
+
+    class FailAfterCapture:
+        async def build_context(self, run_context):
+            await provider.build_context(run_context)
+            raise RuntimeError("context failed")
+
+    service.runtime.context_manager.memory_context_provider = FailAfterCapture()
+    result = await service.chat(
+        AgentRequestContext("tenant", "user", "agent", "context-error"),
+        "触发上下文异常",
+    )
+
+    assert result.success is False
+    assert result.run_id is not None
+    assert not runtime.core_version_snapshots.contains(result.run_id)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_identity_mismatch_releases_snapshot_without_test_cleanup() -> None:
+    trace_store, runtime = _runtime()
+    service = AgentHarnessService.build_default(
+        _settings(),
+        model_gateway=StubModelGateway(),
+        trace_store=trace_store,
+        memory_runtime=runtime,
+    )
+    run_context = await service.runtime.start_run(
+        AgentRequestContext("tenant", "user", "agent", "identity")
+    )
+    await service.runtime.assemble_context(run_context, "读取 Core Memory")
+    mismatched = RunContext(
+        request_context=AgentRequestContext("other", "user", "agent", "identity"),
+        run_id=run_context.run_id,
+        prompt_version=run_context.prompt_version,
+        tool_schema_version=run_context.tool_schema_version,
+        model_provider=run_context.model_provider,
+    )
+
+    with pytest.raises(MemoryStoreIsolationError):
+        await service.runtime.assemble_context(mismatched, "错误身份")
+
+    assert not runtime.core_version_snapshots.contains(run_context.run_id)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_default_core_initialization_is_all_or_nothing() -> None:
+    _trace_store, runtime = _runtime()
+    admin = runtime.fixture_admin
+    assert admin is not None
+    archived = CoreMemoryBlock(
+        tenant_id="tenant",
+        user_id="user",
+        agent_id="agent",
+        block_key="service_notes",
+        description=CORE_BLOCK_SPECS["service_notes"].description,
+        max_tokens=CORE_BLOCK_SPECS["service_notes"].max_tokens,
+        status="archived",
+    )
+    await admin.upsert_core_block(archived)
+
+    with pytest.raises(CoreMemoryContractError):
+        await runtime.repository.ensure_default_core_blocks("tenant", "user", "agent")
+
+    blocks = await runtime.inspection_repository.list_core_blocks_for_scope(
+        "tenant", "user", "agent"
+    )
+    assert [(block.block_key, block.status) for block in blocks] == [
+        ("service_notes", "archived")
+    ]
 
 
 @pytest.mark.asyncio

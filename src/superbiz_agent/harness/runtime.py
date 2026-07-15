@@ -87,36 +87,40 @@ class ConversationRuntime:
         run_context: RunContext,
         current_user_message: str,
     ) -> AssembledContext:
-        assembled = await self.context_assembler.assemble(
-            prepared_context=await self._prepare_context_if_enabled(
-                run_context,
-                current_user_message,
+        try:
+            assembled = await self.context_assembler.assemble(
+                prepared_context=await self._prepare_context_if_enabled(
+                    run_context,
+                    current_user_message,
+                )
+                if self.context_manager is not None
+                else None,
+                prompt_version=run_context.prompt_version,
+                active_history=self._active_history_by_run.get(run_context.run_id, []),
+                current_user_message=current_user_message,
+                run_context=run_context,
             )
-            if self.context_manager is not None
-            else None,
-            prompt_version=run_context.prompt_version,
-            active_history=self._active_history_by_run.get(run_context.run_id, []),
-            current_user_message=current_user_message,
-            run_context=run_context,
-        )
-        await self.trace_store.append_event(
-            run_context,
-            RolloutEventType.CONTEXT_ASSEMBLED,
-            assembled.trace_payload,
-        )
-        if assembled.has_core_memory or assembled.has_memory_index:
             await self.trace_store.append_event(
                 run_context,
-                RolloutEventType.MEMORY_INJECTED,
-                {
-                    "hasCoreMemory": assembled.has_core_memory,
-                    "hasMemoryIndex": assembled.has_memory_index,
-                    "hasMemoryMetadata": assembled.has_memory_metadata,
-                    "coreMemoryBlockCount": assembled.core_memory_block_count,
-                    "memoryIndexTopicCount": assembled.memory_index_topic_count,
-                },
+                RolloutEventType.CONTEXT_ASSEMBLED,
+                assembled.trace_payload,
             )
-        return assembled
+            if assembled.has_core_memory or assembled.has_memory_index:
+                await self.trace_store.append_event(
+                    run_context,
+                    RolloutEventType.MEMORY_INJECTED,
+                    {
+                        "hasCoreMemory": assembled.has_core_memory,
+                        "hasMemoryIndex": assembled.has_memory_index,
+                        "hasMemoryMetadata": assembled.has_memory_metadata,
+                        "coreMemoryBlockCount": assembled.core_memory_block_count,
+                        "memoryIndexTopicCount": assembled.memory_index_topic_count,
+                    },
+                )
+            return assembled
+        except BaseException:
+            self.cleanup_run(run_context.run_id)
+            raise
 
     async def _prepare_context_if_enabled(
         self,

@@ -16,9 +16,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         service = getattr(app.state, "harness_service", None)
-        if isinstance(service, AgentHarnessService):
-            await service.astart()
         try:
+            if isinstance(service, AgentHarnessService):
+                await service.astart()
             yield
         finally:
             if isinstance(service, AgentHarnessService):

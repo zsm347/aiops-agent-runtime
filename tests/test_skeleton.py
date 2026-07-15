@@ -10,6 +10,7 @@ from superbiz_agent.harness.context import AgentRequestContext
 from superbiz_agent.harness.context_assembler import ContextAssembler
 from superbiz_agent.harness.events import RolloutEventType
 from superbiz_agent.harness.service import AgentHarnessService
+from superbiz_agent.memory.errors import MemoryStoreIsolationError
 from superbiz_agent.model_gateway.base import ModelMessage, ModelToolCall
 from superbiz_agent.model_gateway.stub import StubModelGateway
 from superbiz_agent.security.permissions import LOCAL_DEFAULT_PERMISSIONS
@@ -145,6 +146,30 @@ async def test_context_assembler_orders_system_history_user_and_payload() -> Non
     assert assembled.trace_payload["hasCoreMemory"] is False
     assert assembled.trace_payload["hasMemoryIndex"] is False
     assert assembled.trace_payload["hasMemoryMetadata"] is False
+
+
+@pytest.mark.asyncio
+async def test_context_assembler_fails_closed_without_run_context_for_memory() -> None:
+    class MemoryProvider:
+        called = False
+
+        async def build_context(self, run_context):
+            self.called = True
+            raise AssertionError("provider must not receive a missing run context")
+
+    provider = MemoryProvider()
+    assembler = ContextAssembler(
+        PromptRegistry(Path(__file__).resolve().parents[1] / "prompts"),
+        memory_context_provider=provider,
+    )
+
+    with pytest.raises(MemoryStoreIsolationError):
+        await assembler.assemble(
+            prompt_version="ops-agent-system-v2",
+            current_user_message="当前问题",
+        )
+
+    assert provider.called is False
 
 
 @pytest.mark.asyncio

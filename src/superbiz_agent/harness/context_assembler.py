@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from superbiz_agent.harness.context import RunContext
+from superbiz_agent.memory.errors import MemoryStoreIsolationError
 from superbiz_agent.memory.schemas import MemoryContext
 from superbiz_agent.model_gateway.base import ModelMessage
 from superbiz_agent.prompts.registry import PromptRegistry
@@ -84,7 +85,9 @@ class ContextAssembler:
         system_prompt = self.prompt_registry.load(prompt_version)
         messages = [ModelMessage(role="system", content=system_prompt)]
         memory_context = None
-        if self.memory_context_provider is not None and run_context is not None:
+        if self.memory_context_provider is not None and run_context is None:
+            raise MemoryStoreIsolationError()
+        if self.memory_context_provider is not None:
             memory_context = await self.memory_context_provider.build_context(run_context)
             if memory_context.core_memory_xml.strip():
                 messages.append(

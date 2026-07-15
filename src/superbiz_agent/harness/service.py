@@ -75,6 +75,8 @@ class AgentHarnessService:
         self._closed = False
         self._ready_lock = asyncio.Lock()
         self._ready_task: asyncio.Task[None] | None = None
+        self._memory_closed = memory_runtime is None
+        self._rag_closed = not callable(getattr(rag_retrieval_service, "aclose", None))
 
     @classmethod
     def build_default(
@@ -86,6 +88,11 @@ class AgentHarnessService:
         memory_runtime: MemoryRuntimeComponents | None = None,
         rag_retrieval_service: RagRetrievalService | None = None,
     ) -> "AgentHarnessService":
+        if (
+            memory_runtime is not None
+            and memory_runtime.backend != settings.memory_store_backend
+        ):
+            raise ValueError("memory_runtime backend does not match Settings")
         tool_registry = ToolRegistry(schema_version=settings.tool_schema_version)
         prompt_registry = PromptRegistry(settings.resolve_prompt_dir())
         resolved_trace_store = trace_store or (
@@ -203,7 +210,7 @@ class AgentHarnessService:
     async def ensure_ready(self) -> None:
         """Defensive readiness check used directly by ``chat``/``chat_stream``."""
         async with self._ready_lock:
-            if self._ready_task is None or self._ready_task.done():
+            if self._ready_task is None:
                 self._ready_task = asyncio.ensure_future(self._readiness_probe())
             task = self._ready_task
         await asyncio.shield(task)
@@ -329,19 +336,18 @@ class AgentHarnessService:
         await asyncio.shield(task)
 
     async def _close_resources(self) -> None:
-        labels: list[str] = []
         failures: list[tuple[str, BaseException]] = []
-        if self.memory_runtime is not None:
+        if not self._memory_closed and self.memory_runtime is not None:
             try:
                 await self.memory_runtime.aclose()
-                labels.append("memory_runtime")
+                self._memory_closed = True
             except (Exception, asyncio.CancelledError) as exc:
                 failures.append(("memory_runtime", exc))
         close = getattr(self.rag_retrieval_service, "aclose", None)
-        if callable(close):
+        if not self._rag_closed and callable(close):
             try:
                 await close()
-                labels.append("rag_runtime")
+                self._rag_closed = True
             except (Exception, asyncio.CancelledError) as exc:
                 failures.append(("rag_runtime", exc))
         if failures:

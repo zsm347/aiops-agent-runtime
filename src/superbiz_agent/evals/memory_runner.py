@@ -196,6 +196,8 @@ class MemoryEvalRunner:
         retrieval_judge: MemoryRetrievalJudge | None = None,
         use_judge: MemoryUseJudge | None = None,
     ) -> None:
+        if not settings.memory_enabled or settings.memory_store_backend != "memory":
+            raise ValueError("memory evaluation requires memory_store_backend='memory'")
         self.settings = settings
         self.service_factory = service_factory or _default_service_factory
         self.scripted_gateway_factory = scripted_gateway_factory
@@ -997,6 +999,8 @@ def _required_file_hash(path: Path) -> str:
 
 def _configured_tool_schema_fingerprint(settings: Settings) -> str:
     """Hash the active tool contract without constructing a provider client."""
+    if not settings.memory_enabled or settings.memory_store_backend != "memory":
+        raise ValueError("memory tool schema requires memory_store_backend='memory'")
     trace_store = InMemoryRolloutEventStore()
     memory_runtime = build_memory_runtime(settings, trace_store=trace_store)
     definitions = build_builtin_tools(list(memory_runtime.tools))

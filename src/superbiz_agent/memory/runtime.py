@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -25,7 +26,7 @@ from superbiz_agent.persistence.repositories.memory import PostgresMemoryReposit
 from superbiz_agent.tools.registry import ToolDefinition
 
 
-@dataclass(frozen=True)
+@dataclass
 class MemoryRuntimeComponents:
     """Long-term-memory wiring shared by the production Harness and eval fixtures."""
 
@@ -44,6 +45,11 @@ class MemoryRuntimeComponents:
     tools: tuple[ToolDefinition, ...]
     trace_store: RolloutEventStore
     engine: AsyncEngine | None = None
+    _ready_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _ready_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+    _close_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _close_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+    _closed: bool = field(default=False, init=False, repr=False)
 
     async def ensure_ready(self) -> None:
         """Fail closed if the persistence backend does not satisfy the contract.
@@ -51,12 +57,28 @@ class MemoryRuntimeComponents:
         For the ``postgres`` backend this runs the named-schema capability probe.
         For the ``memory`` backend the repository is always ready.
         """
-        await self.repository.ensure_ready()
+        async with self._ready_lock:
+            if self._ready_task is None:
+                self._ready_task = asyncio.create_task(self.repository.ensure_ready())
+            task = self._ready_task
+        await asyncio.shield(task)
 
     async def aclose(self) -> None:
         """Dispose a PostgreSQL engine; a no-op for the in-memory backend."""
+        async with self._close_lock:
+            if self._closed:
+                return
+            task = self._close_task
+            if task is None or task.done():
+                task = asyncio.create_task(self._dispose_engine())
+                self._close_task = task
+        await asyncio.shield(task)
+
+    async def _dispose_engine(self) -> None:
         if self.engine is not None:
             await self.engine.dispose()
+        async with self._close_lock:
+            self._closed = True
 
 
 def build_memory_runtime(

@@ -6,7 +6,10 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from superbiz_agent.config import get_settings
+from superbiz_agent.persistence.alembic_url import (
+    CONNECTION_VALIDATOR_ATTRIBUTE,
+    resolve_alembic_database_url,
+)
 from superbiz_agent.persistence.models import Base
 
 config = context.config
@@ -18,7 +21,7 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    return get_settings().database_url
+    return resolve_alembic_database_url(config)
 
 
 def run_migrations_offline() -> None:
@@ -50,6 +53,11 @@ async def run_async_migrations() -> None:
     )
 
     async with connectable.connect() as connection:
+        validator = config.attributes.get(CONNECTION_VALIDATOR_ATTRIBUTE)
+        if validator is not None:
+            if not callable(validator):
+                raise RuntimeError("Alembic connection validator is invalid.")
+            await connection.run_sync(validator)
         await connection.run_sync(do_run_migrations)
 
     await connectable.dispose()

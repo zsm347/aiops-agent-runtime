@@ -6,6 +6,7 @@ import unicodedata
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 revision = "20260714_01"
@@ -46,6 +47,18 @@ def _core_content_hash(content: str | None) -> str:
     if content is None or not content.strip():
         return ""
     return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+
+
+def _normalize_tag_values(tags: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_tag in tags:
+        tag = raw_tag.strip()
+        if not tag or tag in seen:
+            continue
+        normalized.append(tag)
+        seen.add(tag)
+    return normalized
 
 
 def _safe_failure(code: str, *, count: int, row_ids: list[str]) -> RuntimeError:
@@ -142,6 +155,47 @@ def _backfill_core_hashes(connection: sa.Connection) -> None:
         last_id = str(rows[-1]["id"])
 
 
+def _normalize_tags(connection: sa.Connection) -> None:
+    _invalid_rows(
+        connection,
+        table="long_term_memory",
+        predicate=(
+            "CASE WHEN jsonb_typeof(tags) = 'array' THEN EXISTS ("
+            "SELECT 1 FROM jsonb_array_elements(tags) AS item "
+            "WHERE jsonb_typeof(item) <> 'string') ELSE TRUE END"
+        ),
+        code="memory_migration_invalid_tags",
+    )
+    last_id = ""
+    while True:
+        rows = connection.execute(
+            sa.text(
+                "SELECT id, tags FROM long_term_memory "
+                "WHERE id > :last_id ORDER BY id LIMIT :batch_size"
+            ),
+            {"last_id": last_id, "batch_size": _BATCH_SIZE},
+        ).mappings().all()
+        if not rows:
+            return
+        for row in rows:
+            tags = row["tags"]
+            if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+                raise _safe_failure(
+                    "memory_migration_invalid_tags",
+                    count=1,
+                    row_ids=[str(row["id"])],
+                )
+            normalized = _normalize_tag_values(tags)
+            if normalized != tags:
+                connection.execute(
+                    sa.text(
+                        "UPDATE long_term_memory SET tags = :tags WHERE id = :id"
+                    ).bindparams(sa.bindparam("tags", type_=JSONB)),
+                    {"id": row["id"], "tags": normalized},
+                )
+        last_id = str(rows[-1]["id"])
+
+
 def _invalid_rows(
     connection: sa.Connection,
     *,
@@ -163,16 +217,6 @@ def _invalid_rows(
 
 
 def _preflight(connection: sa.Connection) -> None:
-    _invalid_rows(
-        connection,
-        table="long_term_memory",
-        predicate=(
-            "jsonb_typeof(tags) <> 'array' OR EXISTS ("
-            "SELECT 1 FROM jsonb_array_elements(tags) AS item "
-            "WHERE jsonb_typeof(item) <> 'string')"
-        ),
-        code="memory_migration_invalid_tags",
-    )
     duplicate_groups = int(
         connection.scalar(
             sa.text(
@@ -231,6 +275,7 @@ def upgrade() -> None:
     _normalize_scopes(connection)
     _backfill_archival_hashes(connection)
     _backfill_core_hashes(connection)
+    _normalize_tags(connection)
     _preflight(connection)
 
     op.alter_column(
@@ -242,7 +287,8 @@ def upgrade() -> None:
     op.create_check_constraint(
         ACTIVE_CONTENT_HASH_CHECK,
         "long_term_memory",
-        "status <> 'active' OR content_hash ~ '^[0-9a-f]{64}$'",
+        "status <> 'active' OR "
+        "(content_hash IS NOT NULL AND content_hash ~ '^[0-9a-f]{64}$')",
     )
     op.create_check_constraint(
         SCOPE_SERVICE_NONBLANK_CHECK,

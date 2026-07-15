@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from superbiz_agent.memory.ports import CoreContentWriteResult
+from superbiz_agent.memory.ports import CoreContentWriteResult, ExactMemoryWriteResult
 from superbiz_agent.memory.schemas import CoreMemoryBlock, LongTermMemory
-from superbiz_agent.memory.store import ExactMemoryWriteResult, InMemoryMemoryStore
+from superbiz_agent.memory.store import InMemoryMemoryStore
 
 
 class InMemoryMemoryRepository:

@@ -5,11 +5,12 @@ import threading
 from copy import deepcopy
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Literal
 
 from superbiz_agent.memory.dedup import canonical_content_hash, stable_tag_union
 from superbiz_agent.memory.errors import CoreMemoryContractError
+from superbiz_agent.memory.ports import ExactMemoryWriteResult
 from superbiz_agent.memory.schemas import (
     CORE_BLOCK_SPECS,
     DEFAULT_CORE_BLOCK_KEYS,
@@ -19,14 +20,6 @@ from superbiz_agent.memory.schemas import (
     MemoryTopicSummary,
     utc_now,
 )
-
-
-@dataclass(frozen=True)
-class ExactMemoryWriteResult:
-    status: Literal["written", "duplicate_skipped"]
-    memory: LongTermMemory
-    metadata_merged: bool
-
 
 def content_hash(content: str | None) -> str:
     if content is None or not content.strip():
@@ -63,12 +56,22 @@ class InMemoryMemoryStore:
         """Atomically initialize and return the three active default blocks."""
 
         with self._lock:
+            existing = {
+                block_key: self._core_blocks.get(
+                    (tenant_id, user_id, agent_id, block_key)
+                )
+                for block_key in DEFAULT_CORE_BLOCK_KEYS
+            }
+            if any(
+                block is not None and block.status != "active"
+                for block in existing.values()
+            ):
+                raise CoreMemoryContractError()
+
             blocks: list[CoreMemoryBlock] = []
             for block_key in DEFAULT_CORE_BLOCK_KEYS:
                 key = (tenant_id, user_id, agent_id, block_key)
-                block = self._core_blocks.get(key)
-                if block is not None and block.status != "active":
-                    raise CoreMemoryContractError()
+                block = existing[block_key]
                 if block is None:
                     spec = CORE_BLOCK_SPECS[block_key]
                     block = CoreMemoryBlock(

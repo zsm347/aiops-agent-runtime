@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime
 import math
 import re
@@ -12,7 +13,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from superbiz_agent.memory.dedup import canonical_content_hash, stable_tag_union
+from superbiz_agent.memory.dedup import (
+    canonical_content_hash,
+    canonicalize_archival_content,
+    stable_tag_union,
+)
 from superbiz_agent.memory.errors import (
     CoreMemoryContractError,
     MemoryExactConflictUnresolvedError,
@@ -26,18 +31,23 @@ from superbiz_agent.memory.persistence_contract import (
     CORE_UNIQUE_CONSTRAINT,
     M_P2_REQUIRED_CHECKS,
 )
-from superbiz_agent.memory.ports import CoreContentWriteResult
+from superbiz_agent.memory.ports import CoreContentWriteResult, ExactMemoryWriteResult
 from superbiz_agent.memory.schemas import (
     CORE_BLOCK_SPECS,
     DEFAULT_CORE_BLOCK_KEYS,
     CoreMemoryBlock,
     LongTermMemory as MemoryRecord,
 )
-from superbiz_agent.memory.store import ExactMemoryWriteResult, content_hash
+from superbiz_agent.memory.store import content_hash
 from superbiz_agent.persistence.models import AgentCoreMemoryBlock, LongTermMemory
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_MEMORY_TYPES = frozenset({"rule", "experience", "knowledge"})
+_ARCHIVAL_TYPES = frozenset({"experience", "knowledge"})
+_MEMORY_STATUSES = frozenset({"active", "archived"})
+_MEMORY_SOURCES = frozenset({"realtime", "rollout", "admin_config", "manual"})
+_READ_COMMITTED_SQL = "SET TRANSACTION ISOLATION LEVEL READ COMMITTED"
 _MEMORY_COLUMNS = (
     LongTermMemory.id,
     LongTermMemory.tenant_id,
@@ -133,7 +143,7 @@ class PostgresMemoryRepository:
         )
         try:
             async with self.sessionmaker() as session:
-                async with session.begin():
+                async with _read_committed_transaction(session):
                     await session.execute(statement)
                     rows = (
                         await session.execute(
@@ -224,7 +234,13 @@ class PostgresMemoryRepository:
         expected_version: int,
     ) -> CoreContentWriteResult:
         _require_identity(tenant_id, user_id, agent_id)
-        if block_key not in CORE_BLOCK_SPECS or expected_version < 1:
+        if (
+            block_key not in CORE_BLOCK_SPECS
+            or not isinstance(content, str)
+            or not isinstance(expected_version, int)
+            or isinstance(expected_version, bool)
+            or expected_version < 1
+        ):
             raise MemoryStoreContractError()
         target_hash = content_hash(content)
         statement = (
@@ -249,7 +265,7 @@ class PostgresMemoryRepository:
         )
         try:
             async with self.sessionmaker() as session:
-                async with session.begin():
+                async with _read_committed_transaction(session):
                     row = (await session.execute(statement)).mappings().one_or_none()
                     if row is not None:
                         result = CoreContentWriteResult("updated", _core_record(row))
@@ -289,7 +305,7 @@ class PostgresMemoryRepository:
         )
         try:
             async with self.sessionmaker() as session:
-                async with session.begin():
+                async with _read_committed_transaction(session):
                     row = (await session.execute(insert_statement)).mappings().one_or_none()
                     if row is not None:
                         result = ExactMemoryWriteResult(
@@ -306,6 +322,16 @@ class PostgresMemoryRepository:
                         if existing_row is None:
                             raise MemoryExactConflictUnresolvedError()
                         existing = _memory_record(existing_row)
+                        if existing.id != candidate.id:
+                            candidate_id_occupied = bool(
+                                await session.scalar(
+                                    select(func.count())
+                                    .select_from(LongTermMemory)
+                                    .where(LongTermMemory.id == candidate.id)
+                                )
+                            )
+                            if candidate_id_occupied:
+                                raise MemoryExactConflictUnresolvedError()
                         merged_tags = stable_tag_union(existing.tags, candidate.tags)
                         metadata_merged = merged_tags != existing.tags
                         if metadata_merged:
@@ -355,6 +381,13 @@ class PostgresMemoryRepository:
         scope_env: str | None = None,
         tags: list[str] | None = None,
     ) -> list[MemoryRecord]:
+        _require_identity(tenant_id, user_id, agent_id)
+        if types is not None and not isinstance(types, list):
+            raise MemoryStoreContractError()
+        if tags is not None and (
+            not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags)
+        ):
+            raise MemoryStoreContractError()
         normalized_service = _blank_to_none(scope_service)
         normalized_env = _blank_to_none(scope_env)
         statement = self._memory_scope_statement(tenant_id, user_id, agent_id).where(
@@ -410,10 +443,14 @@ class PostgresMemoryRepository:
         memory_ids: list[str],
     ) -> None:
         _require_identity(tenant_id, user_id, agent_id)
+        if not isinstance(memory_ids, list) or any(
+            not isinstance(value, str) or not value.strip() for value in memory_ids
+        ):
+            raise MemoryStoreContractError()
         ids = tuple(dict.fromkeys(memory_ids))
         if not ids:
             return
-        if len(ids) > 1000 or any(not value.strip() for value in ids):
+        if len(ids) > 1000:
             raise MemoryStoreContractError()
         statement = (
             update(LongTermMemory)
@@ -432,7 +469,7 @@ class PostgresMemoryRepository:
         )
         try:
             async with self.sessionmaker() as session:
-                async with session.begin():
+                async with _read_committed_transaction(session):
                     await session.execute(statement)
         except OperationalError:
             raise MemoryStoreUnavailableError() from None
@@ -492,42 +529,103 @@ class PostgresMemoryRepository:
 
     @staticmethod
     async def _probe_schema_capabilities(session: AsyncSession) -> None:
+        relation_row = (
+            await session.execute(
+                text(
+                    "SELECT memory_rel.oid AS memory_oid, "
+                    "memory_ns.nspname AS memory_schema, "
+                    "core_rel.oid AS core_oid, core_ns.nspname AS core_schema "
+                    "FROM pg_class memory_rel "
+                    "JOIN pg_namespace memory_ns ON memory_ns.oid = memory_rel.relnamespace "
+                    "JOIN pg_class core_rel "
+                    "ON core_rel.oid = to_regclass('agent_core_memory_block')::oid "
+                    "JOIN pg_namespace core_ns ON core_ns.oid = core_rel.relnamespace "
+                    "WHERE memory_rel.oid = to_regclass('long_term_memory')::oid "
+                    "AND memory_rel.relkind IN ('r', 'p') "
+                    "AND core_rel.relkind IN ('r', 'p')"
+                )
+            )
+        ).mappings().one_or_none()
+        if relation_row is None:
+            raise MemoryStoreContractError()
+        memory_oid = int(relation_row["memory_oid"])
+        core_oid = int(relation_row["core_oid"])
+
         constraint_rows = (
             await session.execute(
                 text(
-                    "SELECT rel.relname AS table_name, con.conname, con.contype, "
-                    "pg_get_constraintdef(con.oid) AS definition "
-                    "FROM pg_constraint con "
-                    "JOIN pg_class rel ON rel.oid = con.conrelid "
-                    "WHERE rel.relname IN ('long_term_memory', 'agent_core_memory_block')"
-                )
+                    "SELECT con.conrelid AS relation_oid, con.conname, con.contype, "
+                    "pg_get_expr(con.conbin, con.conrelid, false) AS expression, "
+                    "CASE WHEN con.contype IN ('p', 'u') THEN ARRAY("
+                    "SELECT att.attname FROM unnest(con.conkey) WITH ORDINALITY key(attnum, ord) "
+                    "JOIN pg_attribute att ON att.attrelid = con.conrelid "
+                    "AND att.attnum = key.attnum ORDER BY key.ord) "
+                    "ELSE ARRAY[]::name[] END AS key_columns "
+                    "FROM pg_constraint con WHERE con.conrelid IN (:memory_oid, :core_oid)"
+                ),
+                {"memory_oid": memory_oid, "core_oid": core_oid},
             )
         ).mappings().all()
-        constraints = {str(row["conname"]): row for row in constraint_rows}
-        if not M_P2_REQUIRED_CHECKS.issubset(constraints) or CORE_UNIQUE_CONSTRAINT not in constraints:
-            raise MemoryStoreContractError()
-        _validate_constraint_definitions(constraints)
-
-        index_definition = await session.scalar(
-            text(
-                "SELECT indexdef FROM pg_indexes "
-                "WHERE tablename = 'long_term_memory' AND indexname = :index_name"
-            ),
-            {"index_name": ACTIVE_EXACT_INDEX},
+        constraints = {
+            (int(row["relation_oid"]), str(row["conname"])): row
+            for row in constraint_rows
+        }
+        _validate_constraint_definitions(
+            constraints,
+            memory_oid=memory_oid,
+            core_oid=core_oid,
         )
-        if not isinstance(index_definition, str) or not _valid_exact_index(index_definition):
-            raise MemoryStoreContractError()
 
-        vector_type = await session.scalar(
-            text(
-                "SELECT format_type(att.atttypid, att.atttypmod) "
-                "FROM pg_attribute att JOIN pg_class rel ON rel.oid = att.attrelid "
-                "WHERE rel.relname = 'long_term_memory' AND att.attname = 'embedding' "
-                "AND att.attnum > 0 AND NOT att.attisdropped"
+        index_row = (
+            await session.execute(
+                text(
+                    "SELECT idx.indrelid AS relation_oid, index_ns.nspname AS schema_name, "
+                    "idx.indisunique, idx.indisvalid, idx.indisready, "
+                    "idx.indnkeyatts, idx.indnatts, "
+                    "pg_get_expr(idx.indpred, idx.indrelid, false) AS predicate, "
+                    "ARRAY(SELECT pg_get_indexdef(idx.indexrelid, key_position, false) "
+                    "FROM generate_series(1, idx.indnkeyatts) key_position "
+                    "ORDER BY key_position) AS key_expressions "
+                    "FROM pg_index idx "
+                    "JOIN pg_class index_rel ON index_rel.oid = idx.indexrelid "
+                    "JOIN pg_namespace index_ns ON index_ns.oid = index_rel.relnamespace "
+                    "JOIN pg_class table_rel ON table_rel.oid = idx.indrelid "
+                    "WHERE idx.indrelid = :memory_oid "
+                    "AND index_rel.relname = :index_name "
+                    "AND index_rel.relnamespace = table_rel.relnamespace"
+                ),
+                {"memory_oid": memory_oid, "index_name": ACTIVE_EXACT_INDEX},
             )
-        )
-        if str(vector_type).lower() != "vector(1024)":
+        ).mappings().one_or_none()
+        if index_row is None or not _valid_exact_index(index_row, memory_oid=memory_oid):
             raise MemoryStoreContractError()
+
+        vector_row = (
+            await session.execute(
+                text(
+                    "SELECT att.attrelid AS relation_oid, att.attname, "
+                    "format_type(att.atttypid, att.atttypmod) AS formatted_type "
+                    "FROM pg_attribute att WHERE att.attrelid = :memory_oid "
+                    "AND att.attname = 'embedding' AND att.attnum > 0 "
+                    "AND NOT att.attisdropped"
+                ),
+                {"memory_oid": memory_oid},
+            )
+        ).mappings().one_or_none()
+        if (
+            vector_row is None
+            or int(vector_row["relation_oid"]) != memory_oid
+            or str(vector_row["attname"]) != "embedding"
+            or str(vector_row["formatted_type"]).lower() != "vector(1024)"
+        ):
+            raise MemoryStoreContractError()
+
+
+@asynccontextmanager
+async def _read_committed_transaction(session: AsyncSession):
+    async with session.begin():
+        await session.execute(text(_READ_COMMITTED_SQL))
+        yield
 
 
 def _active_exact_conflict_target() -> list[Any]:
@@ -573,6 +671,13 @@ def _memory_insert_values(memory: MemoryRecord) -> dict[str, Any]:
 
 
 def _embedding_for_write(memory: MemoryRecord) -> list[float] | None:
+    if not isinstance(memory.embedding, list) or any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        for value in memory.embedding
+    ):
+        raise MemoryStoreContractError()
     if memory.embedding_model == "local-deterministic":
         return None
     if memory.embedding_dimension != 1024 or len(memory.embedding) != 1024:
@@ -584,17 +689,35 @@ def _embedding_for_write(memory: MemoryRecord) -> list[float] | None:
 
 def _normalize_archival_candidate(memory: MemoryRecord) -> MemoryRecord:
     _require_identity(memory.tenant_id, memory.user_id, memory.agent_id)
-    if memory.status != "active" or memory.type not in {"experience", "knowledge"}:
-        raise MemoryStoreContractError()
-    if not memory.topic.strip() or not memory.content.strip():
+    if (
+        memory.status != "active"
+        or memory.type not in _ARCHIVAL_TYPES
+        or memory.source not in _MEMORY_SOURCES
+    ):
         raise MemoryStoreContractError()
     if (
-        not memory.embedding_model.strip()
+        not isinstance(memory.topic, str)
+        or not memory.topic.strip()
+        or not isinstance(memory.content, str)
+        or not canonicalize_archival_content(memory.content)
+    ):
+        raise MemoryStoreContractError()
+    if (
+        not isinstance(memory.embedding_model, str)
+        or not memory.embedding_model.strip()
+        or not isinstance(memory.embedding_dimension, int)
+        or isinstance(memory.embedding_dimension, bool)
         or memory.embedding_dimension < 1
         or memory.embedding_metric != "cosine"
+        or not isinstance(memory.embedding_version, str)
         or not memory.embedding_version.strip()
     ):
         raise MemoryStoreContractError()
+    if not isinstance(memory.tags, list) or any(
+        not isinstance(tag, str) for tag in memory.tags
+    ):
+        raise MemoryStoreContractError()
+    _embedding_for_write(memory)
     canonical_hash = canonical_content_hash(memory.content)
     return MemoryRecord(
         **{
@@ -685,8 +808,10 @@ def _memory_record(row: Mapping[str, Any]) -> MemoryRecord:
         raise MemoryStoreContractError() from None
     _require_identity(memory.tenant_id, memory.user_id, memory.agent_id)
     if (
-        memory.type not in {"rule", "experience", "knowledge"}
-        or memory.status not in {"active", "archived"}
+        memory.type not in _MEMORY_TYPES
+        or memory.status not in _MEMORY_STATUSES
+        or memory.source not in _MEMORY_SOURCES
+        or not memory.topic.strip()
         or memory.usage_count < 0
         or memory.embedding_dimension < 1
         or memory.embedding_metric != "cosine"
@@ -695,6 +820,8 @@ def _memory_record(row: Mapping[str, Any]) -> MemoryRecord:
     ):
         raise MemoryStoreContractError()
     if memory.status == "active" and (
+        not canonicalize_archival_content(memory.content)
+        or
         not _SHA256_RE.fullmatch(memory.content_hash)
         or memory.content_hash != canonical_content_hash(memory.content)
     ):
@@ -724,23 +851,28 @@ def _sort_core_blocks(blocks: list[CoreMemoryBlock]) -> list[CoreMemoryBlock]:
 
 
 def _require_identity(tenant_id: str, user_id: str, agent_id: str) -> None:
-    if any(not value or not value.strip() for value in (tenant_id, user_id, agent_id)):
+    if any(
+        not isinstance(value, str) or not value.strip()
+        for value in (tenant_id, user_id, agent_id)
+    ):
         raise MemoryStoreContractError()
 
 
 def _validate_statuses(statuses: tuple[str, ...] | None) -> None:
-    if statuses is not None and any(status not in {"active", "archived"} for status in statuses):
+    if statuses is not None and any(status not in _MEMORY_STATUSES for status in statuses):
         raise MemoryStoreContractError()
 
 
 def _validate_memory_types(types: Sequence[str]) -> None:
-    if any(memory_type not in {"rule", "experience", "knowledge"} for memory_type in types):
+    if any(memory_type not in _MEMORY_TYPES for memory_type in types):
         raise MemoryStoreContractError()
 
 
 def _blank_to_none(value: str | None) -> str | None:
     if value is None:
         return None
+    if not isinstance(value, str):
+        raise MemoryStoreContractError()
     return value.strip() or None
 
 
@@ -762,57 +894,120 @@ def _optional_datetime(value: Any) -> datetime | None:
     return None if value is None else _datetime(value)
 
 
-def _normalized_definition(value: Any) -> str:
-    return " ".join(str(value).replace('"', "").lower().split())
+_SQL_TOKEN_RE = re.compile(
+    r"'(?:''|[^'])*'|<>|>=|<=|=|~|>|<|[a-z_][a-z0-9_]*|[0-9]+",
+    flags=re.IGNORECASE,
+)
+_TYPE_CAST_RE = re.compile(
+    r"::\s*(?:character\s+varying|text|jsonb|integer|bigint|boolean|name)(?:\[\])?",
+    flags=re.IGNORECASE,
+)
 
 
-def _validate_constraint_definitions(constraints: Mapping[str, Mapping[str, Any]]) -> None:
-    required_fragments = {
-        "chk_long_term_memory_active_content_hash": ("status", "active", "content_hash", "64"),
-        "chk_long_term_memory_scope_service_nonblank": ("scope_service", "btrim"),
-        "chk_long_term_memory_scope_env_nonblank": ("scope_env", "btrim"),
-        "chk_long_term_memory_tags_array": ("jsonb_typeof", "tags", "array"),
-        "chk_core_memory_block_key": (
-            "block_key",
-            "user_rules",
-            "user_ops_profile",
-            "service_notes",
-        ),
-        "chk_core_memory_version_positive": ("version", "1"),
-        "chk_core_memory_max_tokens_positive": ("max_tokens", "0"),
-        "chk_core_memory_content_hash_format": ("content_hash", "64"),
+def _expression_tokens(value: Any) -> tuple[str, ...]:
+    normalized = str(value).replace('"', "").lower()
+    normalized = _TYPE_CAST_RE.sub("", normalized)
+    tokens = tuple(_SQL_TOKEN_RE.findall(normalized))
+    return tokens
+
+
+_EXPECTED_CHECK_TOKENS = {
+    "chk_long_term_memory_active_content_hash": _expression_tokens(
+        "status <> 'active' OR content_hash IS NOT NULL "
+        "AND content_hash ~ '^[0-9a-f]{64}$'"
+    ),
+    "chk_long_term_memory_scope_service_nonblank": _expression_tokens(
+        "scope_service IS NULL OR btrim(scope_service) <> ''"
+    ),
+    "chk_long_term_memory_scope_env_nonblank": _expression_tokens(
+        "scope_env IS NULL OR btrim(scope_env) <> ''"
+    ),
+    "chk_long_term_memory_tags_array": _expression_tokens(
+        "jsonb_typeof(tags) = 'array'"
+    ),
+    "chk_core_memory_version_positive": _expression_tokens("version >= 1"),
+    "chk_core_memory_max_tokens_positive": _expression_tokens("max_tokens > 0"),
+    "chk_core_memory_content_hash_format": _expression_tokens(
+        "content_hash = '' OR content_hash ~ '^[0-9a-f]{64}$'"
+    ),
+}
+_CORE_BLOCK_KEY_TOKEN_VARIANTS = {
+    _expression_tokens(
+        "block_key IN ('user_rules', 'user_ops_profile', 'service_notes')"
+    ),
+    _expression_tokens(
+        "block_key = ANY (ARRAY['user_rules', 'user_ops_profile', 'service_notes'])"
+    ),
+}
+_MEMORY_CHECKS = frozenset(
+    {
+        "chk_long_term_memory_active_content_hash",
+        "chk_long_term_memory_scope_service_nonblank",
+        "chk_long_term_memory_scope_env_nonblank",
+        "chk_long_term_memory_tags_array",
     }
-    for name, fragments in required_fragments.items():
-        definition = _normalized_definition(constraints[name]["definition"])
-        if constraints[name]["contype"] != "c" or any(
-            fragment not in definition for fragment in fragments
-        ):
+)
+_CORE_CHECKS = M_P2_REQUIRED_CHECKS - _MEMORY_CHECKS
+
+
+def _validate_constraint_definitions(
+    constraints: Mapping[tuple[int, str], Mapping[str, Any]],
+    *,
+    memory_oid: int,
+    core_oid: int,
+) -> None:
+    required = {
+        **{(memory_oid, name): name for name in _MEMORY_CHECKS},
+        **{(core_oid, name): name for name in _CORE_CHECKS},
+    }
+    if not required.keys() <= constraints.keys():
+        raise MemoryStoreContractError()
+    for key, name in required.items():
+        row = constraints[key]
+        if str(row["contype"]) != "c":
             raise MemoryStoreContractError()
-    core_unique = constraints[CORE_UNIQUE_CONSTRAINT]
-    unique_definition = _normalized_definition(core_unique["definition"])
-    if core_unique["contype"] != "u" or not all(
-        fragment in unique_definition
-        for fragment in ("tenant_id", "user_id", "agent_id", "block_key")
+        actual_tokens = _expression_tokens(row["expression"])
+        if name == "chk_core_memory_block_key":
+            valid = actual_tokens in _CORE_BLOCK_KEY_TOKEN_VARIANTS
+        else:
+            valid = actual_tokens == _EXPECTED_CHECK_TOKENS[name]
+        if not valid:
+            raise MemoryStoreContractError()
+
+    core_unique = constraints.get((core_oid, CORE_UNIQUE_CONSTRAINT))
+    if core_unique is None or str(core_unique["contype"]) != "u":
+        raise MemoryStoreContractError()
+    if tuple(str(value) for value in core_unique["key_columns"]) != (
+        "tenant_id",
+        "user_id",
+        "agent_id",
+        "block_key",
     ):
         raise MemoryStoreContractError()
 
 
-def _valid_exact_index(definition: str) -> bool:
-    normalized = _normalized_definition(definition)
-    key_fragments = (
-        "unique index",
-        "tenant_id",
-        "user_id",
-        "agent_id",
-        "type",
-        "coalesce(scope_service",
-        "coalesce(scope_env",
-        "content_hash",
-    )
-    positions = [normalized.find(fragment) for fragment in key_fragments]
-    if not all(position >= 0 for position in positions) or positions != sorted(positions):
+def _valid_exact_index(row: Mapping[str, Any], *, memory_oid: int) -> bool:
+    if (
+        int(row["relation_oid"]) != memory_oid
+        or row["indisunique"] is not True
+        or row["indisvalid"] is not True
+        or row["indisready"] is not True
+        or int(row["indnkeyatts"]) != 7
+        or int(row["indnatts"]) != 7
+    ):
         return False
-    where_position = normalized.find("where", positions[-1])
-    status_position = normalized.find("status", where_position)
-    active_position = normalized.find("active", status_position)
-    return positions[-1] < where_position < status_position < active_position
+    key_expressions = tuple(_expression_tokens(value) for value in row["key_expressions"])
+    expected_keys = (
+        ("tenant_id",),
+        ("user_id",),
+        ("agent_id",),
+        ("type",),
+        ("coalesce", "scope_service", "''"),
+        ("coalesce", "scope_env", "''"),
+        ("content_hash",),
+    )
+    return key_expressions == expected_keys and _expression_tokens(row["predicate"]) == (
+        "status",
+        "=",
+        "'active'",
+    )

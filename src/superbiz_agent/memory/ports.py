@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from superbiz_agent.memory.schemas import CoreMemoryBlock, LongTermMemory
-from superbiz_agent.memory.store import ExactMemoryWriteResult
+
+
+@dataclass(frozen=True)
+class ExactMemoryWriteResult:
+    status: Literal["written", "duplicate_skipped"]
+    memory: LongTermMemory
+    metadata_merged: bool
 
 
 @dataclass(frozen=True)
@@ -99,4 +105,3 @@ class MemoryFixtureAdmin(Protocol):
     async def upsert_core_block(self, block: CoreMemoryBlock) -> CoreMemoryBlock: ...
 
     async def insert_memory(self, memory: LongTermMemory) -> LongTermMemory: ...
-

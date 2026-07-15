@@ -99,7 +99,8 @@ class LongTermMemory(Base):
         CheckConstraint("status IN ('active', 'archived')", name="chk_long_term_memory_status"),
         CheckConstraint("embedding_dimension > 0", name="chk_long_term_memory_embedding_dimension"),
         CheckConstraint(
-            "status <> 'active' OR content_hash ~ '^[0-9a-f]{64}$'",
+            "status <> 'active' OR "
+            "(content_hash IS NOT NULL AND content_hash ~ '^[0-9a-f]{64}$')",
             name=ACTIVE_CONTENT_HASH_CHECK,
         ),
         CheckConstraint(

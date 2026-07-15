@@ -415,9 +415,36 @@ async def test_concurrent_core_cas_contracts(clean_head, targets, expected_statu
 
 @pytest.mark.asyncio
 async def test_read_only_switch_rejects_old_cas(clean_head) -> None:
-    repository = _repository(clean_head)
-    await repository.ensure_default_core_blocks("readonly", "user", "agent")
+    admin_repository = _repository(clean_head)
+    await admin_repository.ensure_default_core_blocks("readonly", "user", "agent")
+    cas_engine = create_engine(_database_url())
+    cas_repository = _repository(cas_engine)
+    cas_started = asyncio.Event()
+
+    @event.listens_for(cas_engine.sync_engine, "before_cursor_execute")
+    def observe_cas(_conn, _cursor, statement, _params, _context, _many):
+        if statement.startswith("UPDATE agent_core_memory_block"):
+            cas_started.set()
+
     async with clean_head.begin() as connection:
+        await connection.execute(
+            text(
+                "SELECT id FROM agent_core_memory_block "
+                "WHERE tenant_id='readonly' AND user_id='user' AND agent_id='agent' "
+                "AND block_key='user_rules' FOR UPDATE"
+            )
+        )
+        cas_task = asyncio.create_task(
+            cas_repository.cas_replace_core_content(
+                "readonly",
+                "user",
+                "agent",
+                "user_rules",
+                "old cas",
+                expected_version=1,
+            )
+        )
+        await asyncio.wait_for(cas_started.wait(), timeout=5)
         await connection.execute(
             update(AgentCoreMemoryBlock)
             .where(
@@ -426,10 +453,9 @@ async def test_read_only_switch_rejects_old_cas(clean_head) -> None:
             )
             .values(read_only=True)
         )
-    result = await repository.cas_replace_core_content(
-        "readonly", "user", "agent", "user_rules", "old cas", expected_version=1
-    )
+    result = await cas_task
     assert result.status == "read_only"
+    await cas_engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -505,6 +505,19 @@ async def test_readiness_rejects_old_schema_and_accepts_frozen_capabilities() ->
             },
             "constraint",
         ),
+        (
+            {
+                "conname": CORE_UNIQUE_CONSTRAINT,
+                "key_columns": [
+                    "tenant_id",
+                    "user_id",
+                    "agent_id",
+                    "block_key",
+                    "status",
+                ],
+            },
+            "constraint",
+        ),
         ({"indisunique": False}, "index"),
         ({"indisvalid": False}, "index"),
         ({"indisready": False}, "index"),

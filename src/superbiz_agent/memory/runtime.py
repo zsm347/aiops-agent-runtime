@@ -45,10 +45,14 @@ class MemoryRuntimeComponents:
     tools: tuple[ToolDefinition, ...]
     trace_store: RolloutEventStore
     engine: AsyncEngine | None = None
-    _ready_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _lifecycle_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock,
+        init=False,
+        repr=False,
+    )
     _ready_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
-    _close_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _close_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+    _closing: bool = field(default=False, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
 
     async def ensure_ready(self) -> None:
@@ -57,7 +61,9 @@ class MemoryRuntimeComponents:
         For the ``postgres`` backend this runs the named-schema capability probe.
         For the ``memory`` backend the repository is always ready.
         """
-        async with self._ready_lock:
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise RuntimeError("Long-term memory runtime is closing or closed.")
             if self._ready_task is None:
                 self._ready_task = asyncio.create_task(self.repository.ensure_ready())
             task = self._ready_task
@@ -65,9 +71,10 @@ class MemoryRuntimeComponents:
 
     async def aclose(self) -> None:
         """Dispose a PostgreSQL engine; a no-op for the in-memory backend."""
-        async with self._close_lock:
+        async with self._lifecycle_lock:
             if self._closed:
                 return
+            self._closing = True
             task = self._close_task
             if task is None or task.done():
                 task = asyncio.create_task(self._dispose_engine())
@@ -75,9 +82,16 @@ class MemoryRuntimeComponents:
         await asyncio.shield(task)
 
     async def _dispose_engine(self) -> None:
+        async with self._lifecycle_lock:
+            ready_task = self._ready_task
+        if ready_task is not None:
+            try:
+                await asyncio.shield(ready_task)
+            except (Exception, asyncio.CancelledError):
+                pass
         if self.engine is not None:
             await self.engine.dispose()
-        async with self._close_lock:
+        async with self._lifecycle_lock:
             self._closed = True
 
 

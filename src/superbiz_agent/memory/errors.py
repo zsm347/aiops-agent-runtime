@@ -50,4 +50,3 @@ class CoreMemoryContractError(MemoryPersistenceError):
 
     def __init__(self) -> None:
         super().__init__("Core memory blocks do not satisfy the required contract.")
-

@@ -26,4 +26,3 @@ M_P2_REQUIRED_CHECKS = frozenset(
         CORE_CONTENT_HASH_FORMAT_CHECK,
     }
 )
-

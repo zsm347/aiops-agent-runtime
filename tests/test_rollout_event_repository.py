@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from superbiz_agent.persistence.models import AgentRolloutEvent
-from superbiz_agent.persistence.repositories.rollout_events import RolloutEventRepository
-
 sqlalchemy = pytest.importorskip("sqlalchemy")
 postgresql = pytest.importorskip("sqlalchemy.dialects.postgresql")
 delete = sqlalchemy.delete
+
+from superbiz_agent.persistence.models import AgentRolloutEvent
+from superbiz_agent.persistence.repositories.rollout_events import RolloutEventRepository
 
 
 def _compiled(statement) -> str:

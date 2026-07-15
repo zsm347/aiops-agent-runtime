@@ -66,4 +66,3 @@ def _identity(run_context: RunContext) -> tuple[str, str, str]:
         context.user_id or "",
         context.agent_id or "",
     )
-

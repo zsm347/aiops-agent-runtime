@@ -105,7 +105,7 @@ class PostgresMemoryRepository:
                 await self._probe_schema_capabilities(session)
         except MemoryPersistenceError:
             raise
-        except OperationalError:
+        except (OperationalError, OSError):
             raise MemoryStoreUnavailableError() from None
         except SQLAlchemyError:
             raise MemoryStoreContractError() from None
@@ -168,7 +168,7 @@ class PostgresMemoryRepository:
             return _sort_core_blocks(blocks)
         except MemoryPersistenceError:
             raise
-        except OperationalError:
+        except (OperationalError, OSError):
             raise MemoryStoreUnavailableError() from None
         except SQLAlchemyError:
             raise MemoryStoreContractError() from None
@@ -221,7 +221,7 @@ class PostgresMemoryRepository:
                 return _sort_core_blocks([_core_record(row) for row in rows])
         except MemoryPersistenceError:
             raise
-        except OperationalError:
+        except (OperationalError, OSError):
             raise MemoryStoreUnavailableError() from None
         except SQLAlchemyError:
             raise MemoryStoreContractError() from None
@@ -288,7 +288,7 @@ class PostgresMemoryRepository:
             return result
         except MemoryPersistenceError:
             raise
-        except OperationalError:
+        except (OperationalError, OSError):
             raise MemoryStoreUnavailableError() from None
         except SQLAlchemyError:
             raise MemoryStoreContractError() from None
@@ -371,7 +371,7 @@ class PostgresMemoryRepository:
             if _is_exact_or_primary_key_integrity_error(exc):
                 raise MemoryExactConflictUnresolvedError() from None
             raise MemoryStoreContractError() from None
-        except OperationalError:
+        except (OperationalError, OSError):
             raise MemoryStoreUnavailableError() from None
         except SQLAlchemyError:
             raise MemoryStoreContractError() from None
@@ -435,7 +435,7 @@ class PostgresMemoryRepository:
                 return [_memory_record(row) for row in rows]
         except MemoryPersistenceError:
             raise
-        except OperationalError:
+        except (OperationalError, OSError):
             raise MemoryStoreUnavailableError() from None
         except SQLAlchemyError:
             raise MemoryStoreContractError() from None
@@ -476,7 +476,7 @@ class PostgresMemoryRepository:
             async with self.sessionmaker() as session:
                 async with _read_committed_transaction(session):
                     await session.execute(statement)
-        except OperationalError:
+        except (OperationalError, OSError):
             raise MemoryStoreUnavailableError() from None
         except SQLAlchemyError:
             raise MemoryStoreContractError() from None
@@ -559,7 +559,8 @@ class PostgresMemoryRepository:
         constraint_rows = (
             await session.execute(
                 text(
-                    "SELECT con.conrelid AS relation_oid, con.conname, con.contype, "
+                    "SELECT con.conrelid AS relation_oid, con.conname, "
+                    "con.contype::text AS contype, "
                     "con.convalidated, con.condeferrable, con.condeferred, "
                     "pg_get_expr(con.conbin, con.conrelid, false) AS expression, "
                     "CASE WHEN con.contype IN ('p', 'u') THEN ARRAY("

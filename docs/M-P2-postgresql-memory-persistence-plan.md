@@ -4,13 +4,14 @@
 
 ```text
 阶段：M-P2
-状态：design approved / implementation not started
+状态：PostgreSQL gate passed / pending independent acceptance
 目标：把 Core Memory 与 Archival Memory 的唯一事实源从进程内存迁移到 PostgreSQL
 前置：M-R1 complete、M-P0 complete
 后续：M-P1 真实 Embedding 与生产检索、M-P3 语义去重、10G.2B 生命周期治理
 ```
 
-本计划只冻结 M-P2 的实现和验收边界，不表示 M-P2 已实现，也不表示长期记忆整体完成。
+本计划冻结 M-P2 的实现和验收边界。当前实现已通过真实 PostgreSQL gate，但仍需技术负责人
+独立验收；这不表示 M-P2 complete，也不表示长期记忆整体完成。
 
 ## 2. 设计依据与优先级
 
@@ -756,7 +757,22 @@ migration negative cases 必须在真实 PostgreSQL 隔离 schema 上执行，�
 implementation complete / PostgreSQL acceptance pending
 ```
 
-不能标记 M-P2 complete。
+当前分支在 2026-07-16 使用 PostgreSQL 16.14 与 pgvector 0.8.5 完成权威入口验收：
+
+```text
+python scripts/run_memory_postgres_acceptance.py
+planned=39 executed=39 skipped=0 passed=39 failed=0 status=passed
+```
+
+同轮回归为 M-P2 persistence/runtime/snapshot `137 passed`、长期记忆 `24 passed`、Memory
+eval `86 passed`、RAG B/C/D `198 passed`、全量 stub `519 passed, 39 skipped`、基础 eval
+`14/14`。当前状态只能标记：
+
+```text
+PostgreSQL gate passed / pending independent acceptance
+```
+
+在独立验收明确通过前，不能标记 M-P2 complete。
 
 ## 19. 已知残余风险
 

@@ -16,6 +16,7 @@ from superbiz_agent.memory.dedup import canonical_content_hash, canonicalize_arc
 from superbiz_agent.memory.errors import (
     MemoryExactConflictUnresolvedError,
     MemoryStoreContractError,
+    MemoryStoreUnavailableError,
 )
 from superbiz_agent.memory.persistence_contract import (
     ACTIVE_CONTENT_HASH_CHECK,
@@ -557,6 +558,25 @@ async def test_readiness_rejects_old_schema_and_accepts_frozen_capabilities() ->
 
 
 @pytest.mark.asyncio
+async def test_readiness_normalizes_raw_connection_os_errors() -> None:
+    session = _Session(execute_error=ConnectionRefusedError("private endpoint"))
+
+    with pytest.raises(MemoryStoreUnavailableError) as exc_info:
+        await _repository(session).ensure_ready()
+
+    assert "private endpoint" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_readiness_casts_internal_constraint_type_to_text() -> None:
+    session = _Session(results=_ready_catalog_results())
+
+    await _repository(session).ensure_ready()
+
+    assert "con.contype::text AS contype" in str(session.statements[1])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("catalog_overrides", "kind"),
     [
@@ -807,6 +827,15 @@ def test_alembic_url_uses_settings_only_without_explicit_attribute() -> None:
         config,
         settings_factory=lambda: settings,
     ).endswith("/db")
+
+
+def test_alembic_online_migrations_commit_validator_transaction() -> None:
+    source = (
+        Path(__file__).resolve().parents[1] / "alembic" / "env.py"
+    ).read_text(encoding="utf-8")
+
+    assert "async with connectable.begin() as connection:" in source
+    assert "async with connectable.connect() as connection:" not in source
 
 
 @pytest.mark.parametrize(

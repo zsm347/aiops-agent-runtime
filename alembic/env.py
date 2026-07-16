@@ -52,7 +52,7 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
     )
 
-    async with connectable.connect() as connection:
+    async with connectable.begin() as connection:
         validator = config.attributes.get(CONNECTION_VALIDATOR_ATTRIBUTE)
         if validator is not None:
             if not callable(validator):

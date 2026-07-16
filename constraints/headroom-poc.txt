@@ -1,0 +1,2 @@
+# CTX-P0A experiment-only dependency. Do not add to production dependencies.
+headroom-ai==0.31.0

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from superbiz_agent.harness.context import RunContext
-from superbiz_agent.memory.embedding import DeterministicEmbeddingService
+from superbiz_agent.memory.embedding import MemoryEmbeddingService
 from superbiz_agent.memory.policy import MemoryWritePolicy, PolicyDecision
 from superbiz_agent.memory.ports import MemoryRepository
 from superbiz_agent.memory.schemas import LongTermMemory
@@ -65,7 +65,7 @@ class ArchivalMemoryService:
         self,
         repository: MemoryRepository,
         policy: MemoryWritePolicy,
-        embedding_service: DeterministicEmbeddingService,
+        embedding_service: MemoryEmbeddingService,
     ) -> None:
         self.repository = repository
         self.policy = policy
@@ -98,7 +98,9 @@ class ArchivalMemoryService:
         tenant_id = request_context.tenant_id or ""
         user_id = request_context.user_id or ""
         agent_id = request_context.agent_id or ""
-        embedding = self.embedding_service.embed(content)
+        embedding_batch = await self.embedding_service.embed_documents((content.strip(),))
+        embedding = list(embedding_batch.vectors[0])
+        embedding_identity = embedding_batch.identity
         memory = LongTermMemory(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -109,7 +111,10 @@ class ArchivalMemoryService:
             content=content.strip(),
             embedding=embedding,
             content_hash=validation.content_hash or "",
-            embedding_dimension=self.embedding_service.dimension,
+            embedding_provider=embedding_identity.provider,
+            embedding_model=embedding_identity.model,
+            embedding_version=embedding_identity.version,
+            embedding_dimension=embedding_identity.dimension,
             tags=_normalize_tags(tags),
             scope_service=_blank_to_none(scope_service),
             scope_env=_blank_to_none(scope_env),

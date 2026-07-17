@@ -10,7 +10,10 @@ from superbiz_agent.harness.stores import RolloutEventStore
 from superbiz_agent.memory.archival import ArchivalMemoryService
 from superbiz_agent.memory.adapters.in_memory import InMemoryMemoryRepository
 from superbiz_agent.memory.core import CoreMemoryService
-from superbiz_agent.memory.embedding import DeterministicEmbeddingService
+from superbiz_agent.memory.embedding import (
+    MemoryEmbeddingService,
+    build_memory_embedding_service,
+)
 from superbiz_agent.memory.index import MemoryContextProvider, MemoryIndexService
 from superbiz_agent.memory.policy import MemoryWritePolicy
 from superbiz_agent.memory.ports import (
@@ -36,7 +39,7 @@ class MemoryRuntimeComponents:
     fixture_admin: MemoryFixtureAdmin | None
     core_version_snapshots: CoreVersionSnapshotRegistry
     policy: MemoryWritePolicy
-    embedding_service: DeterministicEmbeddingService
+    embedding_service: MemoryEmbeddingService
     core_service: CoreMemoryService
     archival_service: ArchivalMemoryService
     search_service: MemorySearchService
@@ -94,6 +97,7 @@ class MemoryRuntimeComponents:
                 pass
         if self.engine is not None:
             await self.engine.dispose()
+        await self.embedding_service.aclose()
         async with self._lifecycle_lock:
             self._closed = True
 
@@ -126,9 +130,7 @@ def build_memory_runtime(
         raise ValueError(f"unsupported memory_store_backend: {backend!r}")
 
     policy = MemoryWritePolicy()
-    embedding_service = DeterministicEmbeddingService(
-        dimension=settings.memory_embedding_dimension
-    )
+    embedding_service = build_memory_embedding_service(settings)
     snapshots = CoreVersionSnapshotRegistry()
     core_service = CoreMemoryService(repository, policy, snapshots)
     search_service = MemorySearchService(

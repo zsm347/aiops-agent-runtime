@@ -29,6 +29,8 @@ from superbiz_agent.memory.persistence_contract import (
     CORE_CONTENT_HASH_FORMAT_CHECK,
     CORE_MAX_TOKENS_POSITIVE_CHECK,
     CORE_VERSION_POSITIVE_CHECK,
+    EMBEDDING_PROVIDER_NONBLANK_CHECK,
+    EMBEDDING_VECTOR_IDENTITY_CHECK,
     SCOPE_ENV_NONBLANK_CHECK,
     SCOPE_SERVICE_NONBLANK_CHECK,
     TAGS_ARRAY_CHECK,
@@ -102,6 +104,18 @@ class LongTermMemory(Base):
             name=SCOPE_ENV_NONBLANK_CHECK,
         ),
         CheckConstraint("jsonb_typeof(tags) = 'array'", name=TAGS_ARRAY_CHECK),
+        CheckConstraint(
+            "btrim(embedding_provider) <> ''",
+            name=EMBEDDING_PROVIDER_NONBLANK_CHECK,
+        ),
+        CheckConstraint(
+            "embedding IS NULL OR (embedding_dimension = 1024 "
+            "AND embedding_metric = 'cosine' "
+            "AND btrim(embedding_provider) <> '' "
+            "AND btrim(embedding_model) <> '' "
+            "AND btrim(embedding_version) <> '')",
+            name=EMBEDDING_VECTOR_IDENTITY_CHECK,
+        ),
         Index(
             ACTIVE_EXACT_INDEX,
             "tenant_id",
@@ -130,6 +144,11 @@ class LongTermMemory(Base):
     agent_id: Mapped[str] = mapped_column(String, nullable=False)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     embedding: Mapped[list[float] | None] = mapped_column(VECTOR(1024), nullable=True)
+    embedding_provider: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        server_default=text("'legacy-unknown'"),
+    )
     embedding_model: Mapped[str] = mapped_column(
         String,
         nullable=False,

@@ -11,6 +11,8 @@ CORE_VERSION_POSITIVE_CHECK = "chk_core_memory_version_positive"
 CORE_MAX_TOKENS_POSITIVE_CHECK = "chk_core_memory_max_tokens_positive"
 CORE_CONTENT_HASH_FORMAT_CHECK = "chk_core_memory_content_hash_format"
 CORE_UNIQUE_CONSTRAINT = "uq_core_memory_block"
+EMBEDDING_PROVIDER_NONBLANK_CHECK = "chk_long_term_memory_embedding_provider_nonblank"
+EMBEDDING_VECTOR_IDENTITY_CHECK = "chk_long_term_memory_embedding_vector_identity"
 
 ACTIVE_EXACT_PREDICATE_SQL = "status = 'active'"
 
@@ -24,5 +26,12 @@ M_P2_REQUIRED_CHECKS = frozenset(
         CORE_VERSION_POSITIVE_CHECK,
         CORE_MAX_TOKENS_POSITIVE_CHECK,
         CORE_CONTENT_HASH_FORMAT_CHECK,
+    }
+)
+
+M_P1_REQUIRED_CHECKS = frozenset(
+    {
+        EMBEDDING_PROVIDER_NONBLANK_CHECK,
+        EMBEDDING_VECTOR_IDENTITY_CHECK,
     }
 )

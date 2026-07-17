@@ -31,6 +31,7 @@ from superbiz_agent.evals.rag_cases import (
 from superbiz_agent.evals.rag_runner import RagF0Report, RagF0Runner, _query_metrics
 from superbiz_agent.rag.chunking import RagDocumentChunker
 from superbiz_agent.rag.embedding import RagQueryEmbedding
+from superbiz_agent.rag.ingestion import RagIngestionError
 from superbiz_agent.rag.milvus_store import RagHybridSearchHit
 from superbiz_agent.rag.models import (
     RagChunk,
@@ -64,7 +65,7 @@ def test_dataset_contract_hash_sources_splits_and_gold(dataset) -> None:
     assert all(row.rationale and row.source_quote for row in dataset.qrels)
 
 
-def test_pending_baseline_manifest_matches_artifacts_and_report_contract(dataset) -> None:
+def test_real_baseline_manifest_matches_artifacts_and_report_contract(dataset) -> None:
     artifact_root = dataset.root.parents[2] / "artifacts" / "evals" / "rag_f0"
     manifest = json.loads((artifact_root / "dev-baseline-manifest.json").read_text("utf-8"))
     report = RagF0Report.model_validate_json(
@@ -72,16 +73,19 @@ def test_pending_baseline_manifest_matches_artifacts_and_report_contract(dataset
     )
     for filename, expected_hash in manifest["artifacts"].items():
         assert hashlib.sha256((artifact_root / filename).read_bytes()).hexdigest() == expected_hash
-    assert report.status == manifest["status"] == "infrastructure_pending"
+    assert report.status == manifest["status"] == "completed"
     assert report.execution == {
         key: manifest["execution"][key]
         for key in ("planned", "executed", "skipped", "failed")
     }
-    assert report.metrics == {}
-    assert report.slice_metrics == {}
-    assert report.per_query == ()
+    assert report.execution == {"planned": 48, "executed": 48, "skipped": 0, "failed": 0}
+    assert report.infrastructure_failure_count == 0
+    assert len(report.per_query) == 48
+    assert report.metrics["recall_at_10"].value == pytest.approx(0.9545454545)
+    assert report.metrics["no_answer_false_positive_rate"].value == 1.0
+    assert report.embedding["credential_source"] == "model_gateway_authorized"
     assert manifest["dataset_sha256"] == dataset.manifest.dataset_sha256
-    assert manifest["embedding"]["api_calls"] == 0
+    assert manifest["execution"]["executed"] == 48
 
 
 def test_dataset_hash_tampering_fails_closed(dataset, tmp_path: Path) -> None:
@@ -374,6 +378,46 @@ def test_real_entrypoint_static_preflight_requires_exact_scoped_resources() -> N
     )
 
 
+def test_real_entrypoint_requires_explicit_model_gateway_credential_authorization() -> None:
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://localhost/superbiz_rag_f0_dev",
+        rag_enabled=True,
+        rag_fixture_mode=False,
+        rag_rerank_enabled=False,
+        model_api_key="test-only",
+        model_base_url="https://model.invalid/v1",
+        rag_embedding_api_key=None,
+        rag_embedding_base_url=None,
+        rag_milvus_collection="rag_f0_dev",
+    )
+    arguments = {
+        "confirmed": True,
+        "expected_database_name": "superbiz_rag_f0_dev",
+        "expected_milvus_collection": "rag_f0_dev",
+    }
+    assert _static_preflight(settings, **arguments) == "rag_embedding_credentials_unavailable"
+    assert (
+        _static_preflight(
+            settings,
+            **arguments,
+            allow_model_gateway_embedding_credentials=True,
+        )
+        is None
+    )
+
+
+def test_real_entrypoint_reports_sanitized_ingestion_failure_code() -> None:
+    failure = RagIngestionError(
+        stage="embed",
+        code="embedding_failed",
+        message="Document embedding failed.",
+    )
+    assert baseline_entrypoint._failure_code(failure) == (
+        "RagIngestionError:embedding_failed"
+    )
+
+
 class _ScalarRows:
     def __init__(self, values) -> None:
         self._values = values
@@ -390,7 +434,7 @@ class _PreflightConnection:
         self,
         *,
         database="superbiz_rag_f0_dev",
-        postgresql_version="16.14",
+        postgresql_version_number="160014",
         pgvector_version="0.8.5",
         marker="dataset-sha",
         migrations=None,
@@ -398,7 +442,7 @@ class _PreflightConnection:
         documents=0,
     ) -> None:
         self.database = database
-        self.postgresql_version = postgresql_version
+        self.postgresql_version_number = postgresql_version_number
         self.pgvector_version = pgvector_version
         self.marker = marker
         self.migrations = [ALEMBIC_HEAD] if migrations is None else migrations
@@ -410,8 +454,8 @@ class _PreflightConnection:
         sql = str(statement)
         if "current_database" in sql:
             return self.database
-        if "server_version" in sql:
-            return self.postgresql_version
+        if "server_version_num" in sql:
+            return self.postgresql_version_number
         if "pg_extension" in sql:
             return self.pgvector_version
         if "rag_f0_evaluation_marker" in sql:
@@ -451,7 +495,10 @@ class _PreflightEngine:
     ("connection", "failure"),
     [
         (_PreflightConnection(database="wrong"), "actual_database_name_mismatch"),
-        (_PreflightConnection(postgresql_version="16.13"), "postgresql_version_mismatch"),
+        (
+            _PreflightConnection(postgresql_version_number="160013"),
+            "postgresql_version_mismatch",
+        ),
         (_PreflightConnection(pgvector_version="0.8.4"), "pgvector_version_mismatch"),
         (_PreflightConnection(marker="wrong"), "dedicated_database_marker_mismatch"),
         (_PreflightConnection(migrations=["old"]), "alembic_head_mismatch"),
@@ -576,6 +623,7 @@ async def test_real_entrypoint_cleanup_failure_withholds_completed_report(
         model = "embedding-model"
         version = "embedding-v1"
         dimension = 1024
+        batch_size = 10
 
         async def aclose(self):
             return None

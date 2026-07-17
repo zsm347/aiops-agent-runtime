@@ -90,12 +90,18 @@ provider/model/version/dimension identity, and PostgreSQL, pgvector, Milvus Lite
 PyMilvus, and OpenAI package versions. F0 real execution is frozen to PostgreSQL 16.14 and pgvector
 0.8.5; a version mismatch is an infrastructure failure rather than a quality result.
 
+The DashScope OpenAI-compatible embedding endpoint enforces at most 10 input texts per request. F0
+therefore fixes the transport-only embedding batch size to 10 and records it in the artifact. This
+does not change document chunks, model identity, vector dimension, or retrieval ranking.
+
 The entrypoint uses `Settings()` at runtime, does not inspect or print `.env`, and never logs tokens or
 API keys. Missing credentials, disabled RAG, non-dedicated infrastructure, or unavailable services
 produce an `infrastructure_pending` artifact with no quality claims. Deterministic embeddings and
 fixtures are permitted only in unit tests, not in baseline artifacts.
-The real entrypoint requires RAG-specific embedding credentials and endpoint configuration and does
-not fall back to model-gateway credentials or endpoint settings.
+The real entrypoint uses RAG-specific embedding credentials by default and does not silently fall
+back to model-gateway settings. A run may reuse a complete model-gateway key/base-URL pair only when
+the operator explicitly supplies `--allow-model-gateway-embedding-credentials`; the report records
+that credential source without recording either value.
 
 Dense-only and BM25-only ablations are `not_available` in F0 because the current project service
 contract exposes only scope-preserving hybrid retrieval. F0 does not bypass the service or add a
@@ -131,14 +137,18 @@ judge.
 The dataset, report, and any real dev baseline remain
 `pending independent dataset acceptance` until reviewed by the technical owner.
 
-## 2026-07-17 Real-Run Preflight Evidence
+## 2026-07-17 Real Dev Execution Evidence
 
-The protected entrypoint was invoked once for the requested dev pilot. Runtime `Settings` exposed the
-configured provider/model identity but no RAG-specific embedding API key or base URL. The entrypoint
-therefore returned `infrastructure_pending: rag_embedding_credentials_unavailable` before creating
-PostgreSQL or Milvus resources and before any embedding request. Execution was planned 48, executed
-0, skipped 48, with no quality metrics. Holdout remained unopened and rerank remained disabled.
+After explicit operator authorization to reuse the complete model-gateway credential pair, the
+protected entrypoint executed all 48 dev queries once with `text-embedding-v4`. The provider's fixed
+10-input transport limit was applied without changing model or chunk identity. Execution completed
+48/48 with zero infrastructure failures; holdout remained unopened and rerank remained disabled.
 
-This preflight result is not a real dev baseline and does not change the frozen evaluation design.
-Real execution remains blocked until dedicated RAG embedding configuration is available; model-gateway
-credentials must not be substituted.
+The run used PostgreSQL 16.14, pgvector 0.8.5, and local Milvus Lite 3.0. Runner and external cleanup
+checks confirmed zero F0 rows, an absent collection, deleted one-time database/role, a stopped service,
+and a deleted Lite path. Overall Recall@10 was 0.9545, HitRate@3 was 0.8864, MRR@10 was 0.7320, and
+no-answer false-positive rate was 1.0. Full metrics, confidence intervals, per-query rankings, slice
+results, limitations, and error analysis are frozen in `artifacts/evals/rag_f0/`.
+
+This result is `pending independent quality acceptance`. It does not establish rerank effectiveness,
+remote Milvus production latency, or F0/Batch E/Batch F completion.

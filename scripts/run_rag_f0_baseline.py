@@ -32,7 +32,7 @@ from superbiz_agent.persistence.repositories.rag import (
 )
 from superbiz_agent.rag.chunking import RagDocumentChunker
 from superbiz_agent.rag.embedding import build_rag_embedding_service
-from superbiz_agent.rag.ingestion import RagIngestionService
+from superbiz_agent.rag.ingestion import RagIngestionError, RagIngestionService
 from superbiz_agent.rag.milvus_store import MilvusHybridChunkStore
 from superbiz_agent.rag.models import RagDocumentContentType, RagIngestionRequest
 from superbiz_agent.rag.runtime import build_real_rag_retrieval_service
@@ -45,6 +45,7 @@ DATABASE_MARKER_KEY = "rag-f0-dedicated-database"
 ALEMBIC_HEAD = "20260714_01"
 POSTGRESQL_VERSION = "16.14"
 PGVECTOR_VERSION = "0.8.5"
+EMBEDDING_BATCH_SIZE = 10
 
 
 class RagF0SafetyError(RuntimeError):
@@ -58,6 +59,7 @@ async def run(
     confirm_dedicated_postgres: bool,
     expected_database_name: str | None,
     expected_milvus_collection: str | None,
+    allow_model_gateway_embedding_credentials: bool = False,
 ) -> int:
     dataset = load_rag_f0_dataset(dataset_path)
     settings = Settings()
@@ -66,6 +68,7 @@ async def run(
         confirmed=confirm_dedicated_postgres,
         expected_database_name=expected_database_name,
         expected_milvus_collection=expected_milvus_collection,
+        allow_model_gateway_embedding_credentials=allow_model_gateway_embedding_credentials,
     )
     if failure is not None:
         write_rag_f0_report(infrastructure_pending_report(dataset, failure), output)
@@ -73,15 +76,23 @@ async def run(
 
     assert expected_database_name is not None
     assert expected_milvus_collection is not None
-    eval_settings = settings.model_copy(
-        update={
+    use_model_gateway_credentials = allow_model_gateway_embedding_credentials and not (
+        settings.rag_embedding_api_key and settings.rag_embedding_base_url
+    )
+    setting_overrides: dict[str, Any] = {
             "rag_enabled": True,
             "rag_fixture_mode": False,
             "rag_hybrid_top_k": 10,
             "rag_final_top_k": 10,
             "rag_rerank_enabled": False,
-        }
-    )
+            "rag_embedding_batch_size": EMBEDDING_BATCH_SIZE,
+    }
+    if use_model_gateway_credentials:
+        setting_overrides.update(
+            rag_embedding_api_key=settings.model_api_key,
+            rag_embedding_base_url=settings.model_base_url,
+        )
+    eval_settings = settings.model_copy(update=setting_overrides)
     engine = create_engine(eval_settings.database_url)
     sessionmaker = create_sessionmaker(engine)
     embedding: Any | None = None
@@ -115,6 +126,12 @@ async def run(
             "model": embedding.model,
             "version": embedding.version,
             "dimension": embedding.dimension,
+            "batch_size": embedding.batch_size,
+            "credential_source": (
+                "model_gateway_authorized"
+                if use_model_gateway_credentials
+                else "rag_specific"
+            ),
         }
         store = MilvusHybridChunkStore(
             uri=eval_settings.rag_milvus_uri,
@@ -207,6 +224,7 @@ def _static_preflight(
     confirmed: bool,
     expected_database_name: str | None,
     expected_milvus_collection: str | None,
+    allow_model_gateway_embedding_credentials: bool = False,
 ) -> str | None:
     if not confirmed:
         return "dedicated_postgres_not_confirmed"
@@ -234,10 +252,14 @@ def _static_preflight(
         return "rag_fixture_mode_true"
     if settings.rag_rerank_enabled:
         return "rerank_must_be_disabled"
-    if not settings.rag_embedding_api_key:
+    rag_credentials_available = bool(
+        settings.rag_embedding_api_key and settings.rag_embedding_base_url
+    )
+    shared_credentials_available = bool(settings.model_api_key and settings.model_base_url)
+    if not rag_credentials_available and not (
+        allow_model_gateway_embedding_credentials and shared_credentials_available
+    ):
         return "rag_embedding_credentials_unavailable"
-    if not settings.rag_embedding_base_url:
-        return "rag_embedding_endpoint_unavailable"
     provider = settings.rag_embedding_provider.casefold()
     if any(marker in provider for marker in ("deterministic", "fixture", "stub")):
         return "real_rag_embedding_provider_required"
@@ -256,8 +278,8 @@ async def _validate_postgres_preflight(
             if actual_database != expected_database_name:
                 raise RagF0SafetyError("actual_database_name_mismatch")
 
-            postgresql_version = await connection.scalar(text("SHOW server_version"))
-            if postgresql_version != POSTGRESQL_VERSION:
+            postgresql_version_number = await connection.scalar(text("SHOW server_version_num"))
+            if postgresql_version_number != "160014":
                 raise RagF0SafetyError("postgresql_version_mismatch")
 
             pgvector_version = await connection.scalar(
@@ -289,7 +311,7 @@ async def _validate_postgres_preflight(
             if knowledge_base_count != 0 or document_count != 0:
                 raise RagF0SafetyError("rag_tables_not_empty")
             return {
-                "postgresql": str(postgresql_version),
+                "postgresql": POSTGRESQL_VERSION,
                 "pgvector": str(pgvector_version),
                 "milvus_lite": version("milvus-lite"),
             }
@@ -376,6 +398,8 @@ async def _close_resource(
 def _failure_code(exc: Exception) -> str:
     if isinstance(exc, RagF0SafetyError):
         return str(exc)
+    if isinstance(exc, RagIngestionError):
+        return f"RagIngestionError:{exc.code}"
     return exc.__class__.__name__
 
 
@@ -390,6 +414,7 @@ def main() -> None:
     parser.add_argument("--confirm-dedicated-postgres", action="store_true")
     parser.add_argument("--expected-database-name")
     parser.add_argument("--expected-milvus-collection")
+    parser.add_argument("--allow-model-gateway-embedding-credentials", action="store_true")
     args = parser.parse_args()
     raise SystemExit(
         asyncio.run(
@@ -399,6 +424,9 @@ def main() -> None:
                 confirm_dedicated_postgres=args.confirm_dedicated_postgres,
                 expected_database_name=args.expected_database_name,
                 expected_milvus_collection=args.expected_milvus_collection,
+                allow_model_gateway_embedding_credentials=(
+                    args.allow_model_gateway_embedding_credentials
+                ),
             )
         )
     )

@@ -201,7 +201,7 @@ async def _run() -> int:
                 sort_keys=True,
             )
         )
-        return 0 if report.status == "completed" else 1
+        return _report_exit_code(report)
     except MemoryPersistenceError as exc:
         print(json.dumps({"status": "failed", "error_codes": [exc.code]}, sort_keys=True))
         return 1
@@ -233,6 +233,10 @@ async def _run() -> int:
 
 def main() -> int:
     return asyncio.run(_run())
+
+
+def _report_exit_code(report) -> int:
+    return 0 if report.status == "completed" else 1
 
 
 if __name__ == "__main__":

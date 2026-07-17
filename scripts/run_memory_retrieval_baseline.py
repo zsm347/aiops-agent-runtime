@@ -15,7 +15,10 @@ from superbiz_agent.evals.memory_retrieval import (
     load_memory_retrieval_dataset,
     write_memory_retrieval_report,
 )
-from superbiz_agent.memory.embedding import build_memory_embedding_service
+from superbiz_agent.memory.embedding import (
+    REAL_MEMORY_EMBEDDING_PROVIDERS,
+    build_memory_embedding_service,
+)
 from superbiz_agent.memory.errors import MemoryPersistenceError
 from superbiz_agent.persistence.database import create_engine, create_sessionmaker
 from superbiz_agent.persistence.models import LongTermMemory
@@ -87,6 +90,26 @@ async def _run() -> int:
             memory_enabled=True,
             memory_store_backend="postgres",
         )
+        if (
+            settings.memory_embedding_provider not in REAL_MEMORY_EMBEDDING_PROVIDERS
+            or settings.memory_embedding_dimension != 1024
+            or not settings.memory_embedding_api_key
+            or (
+                settings.memory_embedding_provider == "dashscope-openai-compatible"
+                and not settings.memory_embedding_base_url
+            )
+        ):
+            print(
+                json.dumps(
+                    {
+                        "status": "pending",
+                        "reason": "MEMORY_EMBEDDING_configuration_missing",
+                        "exit_code": PENDING_EXIT_CODE,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return PENDING_EXIT_CODE
         dataset, dataset_sha = load_memory_retrieval_dataset(DATASET_PATH, MANIFEST_PATH)
         fixture_ids = [fixture.fixture_id for fixture in dataset.fixtures]
         engine = create_engine(database_url)
@@ -131,6 +154,8 @@ async def _run() -> int:
             dataset_sha,
             postgresql_version=postgresql_version,
             pgvector_version=pgvector_version,
+            production_default_top_k=settings.memory_search_top_k,
+            production_default_min_similarity=settings.memory_search_min_similarity,
         )
         await runner.seed_fixtures()
         report = await runner.run()
@@ -142,7 +167,11 @@ async def _run() -> int:
             / "memory_retrieval"
             / f"{timestamp}-{dataset.version}-dev.json"
         )
-        write_memory_retrieval_report(report, report_path)
+        artifact_manifest, artifact_manifest_path = write_memory_retrieval_report(
+            report,
+            report_path,
+        )
+        candidate = report.candidate_evaluation
         print(
             json.dumps(
                 {
@@ -152,9 +181,22 @@ async def _run() -> int:
                     "executed": report.executed_cases,
                     "skipped": report.skipped_cases,
                     "infrastructure_failures": report.infrastructure_failures,
+                    "scan_status": report.scan_status,
+                    "production_candidate_status": report.production_candidate_status,
                     "selected_top_k": report.selected_top_k,
                     "selected_min_similarity": report.selected_min_similarity,
+                    "quality_gate_passed": (
+                        candidate.quality_gate.passed if candidate is not None else False
+                    ),
+                    "candidate_actual_p50_latency_ms": (
+                        candidate.actual_query_p50_latency_ms if candidate is not None else None
+                    ),
+                    "candidate_actual_p95_latency_ms": (
+                        candidate.actual_query_p95_latency_ms if candidate is not None else None
+                    ),
                     "report_path": str(report_path.relative_to(ROOT)),
+                    "report_sha256": artifact_manifest.report_sha256,
+                    "report_manifest_path": str(artifact_manifest_path.relative_to(ROOT)),
                 },
                 sort_keys=True,
             )

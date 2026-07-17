@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.types import UserDefinedType
+from pgvector.sqlalchemy import VECTOR
 
 from superbiz_agent.memory.persistence_contract import (
     ACTIVE_CONTENT_HASH_CHECK,
@@ -33,16 +33,6 @@ from superbiz_agent.memory.persistence_contract import (
     SCOPE_SERVICE_NONBLANK_CHECK,
     TAGS_ARRAY_CHECK,
 )
-
-
-class PgVector(UserDefinedType):
-    cache_ok = True
-
-    def __init__(self, dimension: int) -> None:
-        self.dimension = dimension
-
-    def get_col_spec(self, **kw: Any) -> str:
-        return f"VECTOR({self.dimension})"
 
 
 class Base(DeclarativeBase):
@@ -139,7 +129,7 @@ class LongTermMemory(Base):
     session_id: Mapped[str | None] = mapped_column(String, nullable=True)
     agent_id: Mapped[str] = mapped_column(String, nullable=False)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
-    embedding: Mapped[list[float] | None] = mapped_column(PgVector(1024), nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(VECTOR(1024), nullable=True)
     embedding_model: Mapped[str] = mapped_column(
         String,
         nullable=False,

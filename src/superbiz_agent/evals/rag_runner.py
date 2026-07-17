@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 from uuid import uuid4
 
 from llama_index.core.evaluation.retrieval.metrics import (
@@ -73,7 +73,10 @@ class RagF0Report(RagF0ReportModel):
     dataset_version: str
     split: Literal["dev"]
     query_count: int
+    execution: dict[str, int]
     infrastructure_failure_count: int
+    embedding: dict[str, str | int]
+    infrastructure_versions: dict[str, str]
     metrics: dict[str, RagF0MetricSummary]
     slice_metrics: dict[str, dict[str, RagF0MetricSummary]]
     latency_ms: dict[str, float | None]
@@ -94,6 +97,8 @@ class RagF0Runner:
         dataset: RagF0Dataset,
         bootstrap_samples: int = 2000,
         bootstrap_seed: int = 20260717,
+        embedding_identity: Mapping[str, str | int] | None = None,
+        infrastructure_versions: Mapping[str, str] | None = None,
     ) -> None:
         if bootstrap_samples < 100:
             raise ValueError("bootstrap_samples must be at least 100")
@@ -102,6 +107,8 @@ class RagF0Runner:
         self._mapper = RagF0EvidenceMapper(dataset)
         self._bootstrap_samples = bootstrap_samples
         self._bootstrap_seed = bootstrap_seed
+        self._embedding_identity = dict(embedding_identity or {})
+        self._infrastructure_versions = dict(infrastructure_versions or {})
 
     async def run_dev(self) -> RagF0Report:
         started_at = _utc_now()
@@ -128,7 +135,15 @@ class RagF0Runner:
             dataset_version=self._dataset.manifest.dataset_version,
             split="dev",
             query_count=len(results),
+            execution={
+                "planned": len(results),
+                "executed": len(results),
+                "skipped": 0,
+                "failed": infrastructure_failures,
+            },
             infrastructure_failure_count=infrastructure_failures,
+            embedding=self._embedding_identity,
+            infrastructure_versions=self._infrastructure_versions,
             metrics=metrics,
             slice_metrics=slice_metrics,
             latency_ms={
@@ -349,7 +364,10 @@ def infrastructure_pending_report(dataset: RagF0Dataset, failure: str) -> RagF0R
         dataset_version=dataset.manifest.dataset_version,
         split="dev",
         query_count=48,
+        execution={"planned": 48, "executed": 0, "skipped": 48, "failed": 0},
         infrastructure_failure_count=48,
+        embedding={},
+        infrastructure_versions={},
         metrics={},
         slice_metrics={},
         latency_ms={"p50": None, "p95": None},

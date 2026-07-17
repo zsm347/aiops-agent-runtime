@@ -1,0 +1,47 @@
+{
+  "acceptance": "pending_independent_dataset_acceptance",
+  "artifacts": {
+    "dev-baseline-report.md": "b2f0660364351755ce00614d6b2a3e5f208bc69aed2cc81cd7f9934a536ee6fd",
+    "dev-baseline.json": "4123ff15dadad04d730cde98bd9344e0741655d13313823fc819d8483b2df669"
+  },
+  "code_commit": "b83c38ef6c8658d9daff2c77b06ce08074ce7c74",
+  "dataset_sha256": "0627e66b0b5b40cb1fbe326f2dfb980be2f43440d264056b5ebc774e157d26ec",
+  "embedding": {
+    "api_calls": 0,
+    "dimension": 1024,
+    "model": "text-embedding-v4",
+    "provider": "dashscope-openai-compatible",
+    "rag_base_url_configured": false,
+    "rag_credentials_configured": false,
+    "version": "text-embedding-v4"
+  },
+  "execution": {
+    "executed": 0,
+    "failed": 0,
+    "infrastructure_failure_count": 48,
+    "planned": 48,
+    "skipped": 48
+  },
+  "finished_at": "2026-07-17T12:49:34.926547Z",
+  "infrastructure": {
+    "cleanup_failures": 0,
+    "milvus_collection_created": false,
+    "milvus_file_created": false,
+    "postgresql_database_created": false,
+    "postgresql_role_created": false,
+    "postgresql_service_started": false
+  },
+  "locally_available_versions": {
+    "llama_index_core": "0.14.23",
+    "llama_index_milvus_adapter": "1.1.0",
+    "milvus_lite": "3.0",
+    "openai": "2.45.0",
+    "pgvector": "0.8.5",
+    "postgresql": "16.14",
+    "pymilvus": "2.6.16"
+  },
+  "reason": "rag_embedding_credentials_unavailable",
+  "split": "dev",
+  "started_at": "2026-07-17T12:49:34.926547Z",
+  "status": "infrastructure_pending"
+}

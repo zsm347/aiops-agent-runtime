@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Awaitable, Callable
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,8 @@ MILVUS_COLLECTION_PREFIX = "rag_f0_"
 DATABASE_MARKER_TABLE = "rag_f0_evaluation_marker"
 DATABASE_MARKER_KEY = "rag-f0-dedicated-database"
 ALEMBIC_HEAD = "20260714_01"
+POSTGRESQL_VERSION = "16.14"
+PGVECTOR_VERSION = "0.8.5"
 
 
 class RagF0SafetyError(RuntimeError):
@@ -87,9 +90,11 @@ async def run(
     candidate_report: RagF0Report | None = None
     failure_codes: list[str] = []
     cleanup_authorized = False
+    infrastructure_versions: dict[str, str] = {}
+    embedding_identity: dict[str, str | int] = {}
 
     try:
-        await _validate_postgres_preflight(
+        infrastructure_versions = await _validate_postgres_preflight(
             engine,
             expected_database_name=expected_database_name,
             dataset_sha256=dataset.manifest.dataset_sha256,
@@ -105,6 +110,12 @@ async def run(
         cleanup_authorized = True
 
         embedding = build_rag_embedding_service(eval_settings)
+        embedding_identity = {
+            "provider": embedding.provider,
+            "model": embedding.model,
+            "version": embedding.version,
+            "dimension": embedding.dimension,
+        }
         store = MilvusHybridChunkStore(
             uri=eval_settings.rag_milvus_uri,
             token=eval_settings.rag_milvus_token,
@@ -153,6 +164,8 @@ async def run(
         candidate_report = await RagF0Runner(
             retrieval_service=runtime,
             dataset=dataset,
+            embedding_identity=embedding_identity,
+            infrastructure_versions=infrastructure_versions,
         ).run_dev()
     except Exception as exc:
         failure_codes.append(_failure_code(exc))
@@ -221,8 +234,13 @@ def _static_preflight(
         return "rag_fixture_mode_true"
     if settings.rag_rerank_enabled:
         return "rerank_must_be_disabled"
-    if not (settings.rag_embedding_api_key or settings.model_api_key):
-        return "real_embedding_credentials_unavailable"
+    if not settings.rag_embedding_api_key:
+        return "rag_embedding_credentials_unavailable"
+    if not settings.rag_embedding_base_url:
+        return "rag_embedding_endpoint_unavailable"
+    provider = settings.rag_embedding_provider.casefold()
+    if any(marker in provider for marker in ("deterministic", "fixture", "stub")):
+        return "real_rag_embedding_provider_required"
     return None
 
 
@@ -231,12 +249,22 @@ async def _validate_postgres_preflight(
     *,
     expected_database_name: str,
     dataset_sha256: str,
-) -> None:
+) -> dict[str, str]:
     try:
         async with engine.connect() as connection:
             actual_database = await connection.scalar(text("SELECT current_database()"))
             if actual_database != expected_database_name:
                 raise RagF0SafetyError("actual_database_name_mismatch")
+
+            postgresql_version = await connection.scalar(text("SHOW server_version"))
+            if postgresql_version != POSTGRESQL_VERSION:
+                raise RagF0SafetyError("postgresql_version_mismatch")
+
+            pgvector_version = await connection.scalar(
+                text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+            )
+            if pgvector_version != PGVECTOR_VERSION:
+                raise RagF0SafetyError("pgvector_version_mismatch")
 
             marker = await connection.scalar(
                 text(
@@ -260,6 +288,11 @@ async def _validate_postgres_preflight(
             document_count = await connection.scalar(select(func.count()).select_from(RagDocument))
             if knowledge_base_count != 0 or document_count != 0:
                 raise RagF0SafetyError("rag_tables_not_empty")
+            return {
+                "postgresql": str(postgresql_version),
+                "pgvector": str(pgvector_version),
+                "milvus_lite": version("milvus-lite"),
+            }
     except RagF0SafetyError:
         raise
     except Exception:

@@ -85,10 +85,17 @@ partial-query, or cleanup failures produce an `infrastructure_pending` artifact 
 quality metrics. A pre-existing collection is never claimed or dropped by the normal runner.
 Cleanup re-queries PostgreSQL and Milvus and fails closed if owned resources remain.
 
+The real-run artifact records planned/executed/skipped/failed query counts, the non-secret embedding
+provider/model/version/dimension identity, and PostgreSQL, pgvector, Milvus Lite, LlamaIndex, adapter,
+PyMilvus, and OpenAI package versions. F0 real execution is frozen to PostgreSQL 16.14 and pgvector
+0.8.5; a version mismatch is an infrastructure failure rather than a quality result.
+
 The entrypoint uses `Settings()` at runtime, does not inspect or print `.env`, and never logs tokens or
 API keys. Missing credentials, disabled RAG, non-dedicated infrastructure, or unavailable services
 produce an `infrastructure_pending` artifact with no quality claims. Deterministic embeddings and
 fixtures are permitted only in unit tests, not in baseline artifacts.
+The real entrypoint requires RAG-specific embedding credentials and endpoint configuration and does
+not fall back to model-gateway credentials or endpoint settings.
 
 Dense-only and BM25-only ablations are `not_available` in F0 because the current project service
 contract exposes only scope-preserving hybrid retrieval. F0 does not bypass the service or add a
@@ -123,3 +130,15 @@ judge.
 
 The dataset, report, and any real dev baseline remain
 `pending independent dataset acceptance` until reviewed by the technical owner.
+
+## 2026-07-17 Real-Run Preflight Evidence
+
+The protected entrypoint was invoked once for the requested dev pilot. Runtime `Settings` exposed the
+configured provider/model identity but no RAG-specific embedding API key or base URL. The entrypoint
+therefore returned `infrastructure_pending: rag_embedding_credentials_unavailable` before creating
+PostgreSQL or Milvus resources and before any embedding request. Execution was planned 48, executed
+0, skipped 48, with no quality metrics. Holdout remained unopened and rerank remained disabled.
+
+This preflight result is not a real dev baseline and does not change the frozen evaluation design.
+Real execution remains blocked until dedicated RAG embedding configuration is available; model-gateway
+credentials must not be substituted.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import shutil
 from pathlib import Path
@@ -26,7 +28,7 @@ from superbiz_agent.evals.rag_cases import (
     default_rag_f0_dataset_path,
     load_rag_f0_dataset,
 )
-from superbiz_agent.evals.rag_runner import RagF0Runner, _query_metrics
+from superbiz_agent.evals.rag_runner import RagF0Report, RagF0Runner, _query_metrics
 from superbiz_agent.rag.chunking import RagDocumentChunker
 from superbiz_agent.rag.embedding import RagQueryEmbedding
 from superbiz_agent.rag.milvus_store import RagHybridSearchHit
@@ -60,6 +62,26 @@ def test_dataset_contract_hash_sources_splits_and_gold(dataset) -> None:
     assert sum("multi_evidence" in query.slices for query in dataset.queries) == 6
     assert all(query.generation.model is None for query in dataset.queries)
     assert all(row.rationale and row.source_quote for row in dataset.qrels)
+
+
+def test_pending_baseline_manifest_matches_artifacts_and_report_contract(dataset) -> None:
+    artifact_root = dataset.root.parents[2] / "artifacts" / "evals" / "rag_f0"
+    manifest = json.loads((artifact_root / "dev-baseline-manifest.json").read_text("utf-8"))
+    report = RagF0Report.model_validate_json(
+        (artifact_root / "dev-baseline.json").read_text("utf-8")
+    )
+    for filename, expected_hash in manifest["artifacts"].items():
+        assert hashlib.sha256((artifact_root / filename).read_bytes()).hexdigest() == expected_hash
+    assert report.status == manifest["status"] == "infrastructure_pending"
+    assert report.execution == {
+        key: manifest["execution"][key]
+        for key in ("planned", "executed", "skipped", "failed")
+    }
+    assert report.metrics == {}
+    assert report.slice_metrics == {}
+    assert report.per_query == ()
+    assert manifest["dataset_sha256"] == dataset.manifest.dataset_sha256
+    assert manifest["embedding"]["api_calls"] == 0
 
 
 def test_dataset_hash_tampering_fails_closed(dataset, tmp_path: Path) -> None:
@@ -168,16 +190,28 @@ async def test_runner_calls_service_with_backend_scope_and_is_reproducible(datas
         retrieval_service=service,
         dataset=dataset,
         bootstrap_samples=100,
+        embedding_identity={
+            "provider": "real-provider",
+            "model": "embedding-model",
+            "version": "embedding-v1",
+            "dimension": 1024,
+        },
+        infrastructure_versions={"postgresql": "16.14", "pgvector": "0.8.5"},
     ).run_dev()
     second = await RagF0Runner(
         retrieval_service=service,
         dataset=dataset,
         bootstrap_samples=100,
+        embedding_identity=first.embedding,
+        infrastructure_versions=first.infrastructure_versions,
     ).run_dev()
 
     assert first.status == "completed"
     assert first.query_count == 48
     assert first.infrastructure_failure_count == 0
+    assert first.execution == {"planned": 48, "executed": 48, "skipped": 0, "failed": 0}
+    assert first.embedding["provider"] == "real-provider"
+    assert first.infrastructure_versions["postgresql"] == "16.14"
     assert first.metrics == second.metrics
     assert first.slice_metrics == second.slice_metrics
     assert first.metrics["recall_at_10"].value == 1.0
@@ -308,6 +342,7 @@ def test_real_entrypoint_static_preflight_requires_exact_scoped_resources() -> N
         rag_fixture_mode=False,
         rag_rerank_enabled=False,
         rag_embedding_api_key="test-only",
+        rag_embedding_base_url="https://embedding.invalid/v1",
         rag_milvus_collection="rag_f0_dev",
     )
     assert (
@@ -355,12 +390,16 @@ class _PreflightConnection:
         self,
         *,
         database="superbiz_rag_f0_dev",
+        postgresql_version="16.14",
+        pgvector_version="0.8.5",
         marker="dataset-sha",
         migrations=None,
         knowledge_bases=0,
         documents=0,
     ) -> None:
         self.database = database
+        self.postgresql_version = postgresql_version
+        self.pgvector_version = pgvector_version
         self.marker = marker
         self.migrations = [ALEMBIC_HEAD] if migrations is None else migrations
         self.knowledge_bases = knowledge_bases
@@ -371,6 +410,10 @@ class _PreflightConnection:
         sql = str(statement)
         if "current_database" in sql:
             return self.database
+        if "server_version" in sql:
+            return self.postgresql_version
+        if "pg_extension" in sql:
+            return self.pgvector_version
         if "rag_f0_evaluation_marker" in sql:
             return self.marker
         if "rag_knowledge_base" in sql:
@@ -408,6 +451,8 @@ class _PreflightEngine:
     ("connection", "failure"),
     [
         (_PreflightConnection(database="wrong"), "actual_database_name_mismatch"),
+        (_PreflightConnection(postgresql_version="16.13"), "postgresql_version_mismatch"),
+        (_PreflightConnection(pgvector_version="0.8.4"), "pgvector_version_mismatch"),
         (_PreflightConnection(marker="wrong"), "dedicated_database_marker_mismatch"),
         (_PreflightConnection(migrations=["old"]), "alembic_head_mismatch"),
         (_PreflightConnection(knowledge_bases=1), "rag_tables_not_empty"),
@@ -425,11 +470,16 @@ async def test_postgres_preflight_fails_closed(connection, failure) -> None:
 
 @pytest.mark.asyncio
 async def test_postgres_preflight_accepts_exact_empty_marked_database() -> None:
-    await _validate_postgres_preflight(
+    versions = await _validate_postgres_preflight(
         _PreflightEngine(_PreflightConnection()),
         expected_database_name="superbiz_rag_f0_dev",
         dataset_sha256="dataset-sha",
     )
+    assert versions == {
+        "postgresql": "16.14",
+        "pgvector": "0.8.5",
+        "milvus_lite": "3.0",
+    }
 
 
 class _MilvusClient:
@@ -510,6 +560,7 @@ async def test_real_entrypoint_cleanup_failure_withholds_completed_report(
         rag_fixture_mode=False,
         rag_rerank_enabled=False,
         rag_embedding_api_key="test-only",
+        rag_embedding_base_url="https://embedding.invalid/v1",
         rag_milvus_uri="test.db",
         rag_milvus_collection="rag_f0_dev",
     )
@@ -521,6 +572,11 @@ async def test_real_entrypoint_cleanup_failure_withholds_completed_report(
     captured = []
 
     class Resource:
+        provider = "real-provider"
+        model = "embedding-model"
+        version = "embedding-v1"
+        dimension = 1024
+
         async def aclose(self):
             return None
 
@@ -556,6 +612,7 @@ async def test_real_entrypoint_cleanup_failure_withholds_completed_report(
 
     async def postgres_preflight(*args, **kwargs):
         del args, kwargs
+        return {"postgresql": "16.14", "pgvector": "0.8.5", "milvus_lite": "3.0"}
 
     async def cleanup_failure(sessionmaker):
         del sessionmaker

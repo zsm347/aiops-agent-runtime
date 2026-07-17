@@ -2,7 +2,7 @@
   "ablations": {
     "bm25_only": "not_available",
     "dense_only": "not_available",
-    "hybrid": "infrastructure_pending: dedicated_postgres_not_confirmed"
+    "hybrid": "infrastructure_pending: rag_embedding_credentials_unavailable"
   },
   "acceptance": "pending_independent_dataset_acceptance",
   "baseline": "dense_native_bm25_rrf_k60_no_rerank",
@@ -15,8 +15,16 @@
     "openai": "2.45.0",
     "pymilvus": "2.6.16"
   },
-  "finished_at": "2026-07-17T08:16:24.219907Z",
+  "embedding": {},
+  "execution": {
+    "executed": 0,
+    "failed": 0,
+    "planned": 48,
+    "skipped": 48
+  },
+  "finished_at": "2026-07-17T12:49:34.926547Z",
   "infrastructure_failure_count": 48,
+  "infrastructure_versions": {},
   "latency_ms": {
     "p50": null,
     "p95": null
@@ -39,6 +47,6 @@
   },
   "slice_metrics": {},
   "split": "dev",
-  "started_at": "2026-07-17T08:16:24.219907Z",
+  "started_at": "2026-07-17T12:49:34.926547Z",
   "status": "infrastructure_pending"
 }

@@ -56,14 +56,22 @@
 - 若 scan 完整但 candidate 实配复跑发生 database/Embedding/network error，report 必须为
   `infrastructure_failed`、candidate 为 `candidate_not_evaluated`、ranking 为
   `not_evaluated`、CLI 非零；不得伪装成质量 `no_candidate`。该状态机单测已覆盖。
-- 当前 Settings 没有独立 `MEMORY_EMBEDDING_*` 配置，真实 baseline 返回 pending/exit 3；没有
-  从 Chat/RAG credential 回退，没有 API 调用，没有生成新 report，report SHA 为
-  `not_generated (pending)`，candidate 结论为 `pending`。
+- 用户明确授权本次验收复用项目阿里云 key/base URL，并仅在验收进程内显式映射为独立
+  `MEMORY_EMBEDDING_*`；产品代码仍无 fallback，未读取/打印/修改 `.env`。唯一一次真实
+  `text-embedding-v4/1024` scan 为 12/12、0 skip、0 infrastructure failure。
+- 三轨真实结论：semantic/no-match/isolation observation 为 7/2/3；所有 topK=3 threshold 都未
+  通过硬 gate。0.0/0.2 有 no-match FPR=1 和 hard-negative，0.4/0.5 仍有 hard-negative，
+  0.6/0.7 分别只有 1/3、2/3 isolation empty case 通过。identity/forbidden leakage 始终为 0。
+- production candidate 为 `no_candidate`，selected config 和 candidate latency 均为 null；
+  生产默认 0.5 不变。
+- 脱敏 report SHA `e67f0fffadc9acfd441d22586456e1ff264d749067761fef29b21da981e8dc59`，
+  manifest SHA `aecc1ed4e00f9d06a7e3748a85a753846988e41b210a4afd80e11d835659e21b`，
+  Dataset SHA `007b2c17505784f53ab8937f19d243949a7899a7d6da256de62639d147ac3cbe`。
 - 本轮回归：retrieval/embedding/backfill `43 passed`、M-P1 PG `7/7`、M-P2 PG `39/39`、
   全量 stub `564 passed / 46 skipped`；最终静态与冻结 hash 门禁见 M-P1 plan 第 15 节。
 - 冻结 prompt、Memory Dataset v1、Judge、Graph、OpenAI tool schema SHA-256 均未变化。
-- 下一步是注入独立 Memory embedding 配置后只运行一次轻量真实 baseline，并提交脱敏
-  report/manifest，再由技术负责人独立验收；不要转 Ready、不要合并、不要进入 M-P3。
+- 下一步仅为技术负责人独立复核 report/manifest 与 no-candidate 结论；不要转 Ready、不要
+  合并、不要进入 M-P3，也不要根据该 12-case pilot 修改生产 threshold。
 
 详见 `docs/M-P1-real-embedding-retrieval-plan.md`。
 

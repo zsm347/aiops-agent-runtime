@@ -419,15 +419,27 @@ class MemoryRetrievalRunner:
             )
         accepted = candidate_evaluation is not None and candidate_evaluation.accepted
         all_errors = scan_errors + candidate_errors
+        infrastructure_failed = bool(all_errors)
         error_analysis = self._quality_errors(
             candidate_evaluation.observations if candidate_evaluation else observations
         )
+        if infrastructure_failed:
+            status = "infrastructure_failed"
+            candidate_status = "candidate_not_evaluated"
+        elif accepted:
+            status = "completed"
+            candidate_status = "dev_pilot_candidate"
+        else:
+            status = "completed" if scan_complete else "failed"
+            candidate_status = "no_candidate"
         return MemoryRetrievalReport(
             report_schema_version=REPORT_SCHEMA_VERSION,
-            status="completed" if scan_complete else "failed",
+            status=status,
             scan_status="completed" if scan_complete else "failed",
-            production_retrieval_ranking="evaluated" if scan_complete else "not_evaluated",
-            production_candidate_status="dev_pilot_candidate" if accepted else "no_candidate",
+            production_retrieval_ranking=(
+                "evaluated" if scan_complete and not candidate_errors else "not_evaluated"
+            ),
+            production_candidate_status=candidate_status,
             dataset_version=self.dataset.version,
             dataset_sha256=self.dataset_sha256,
             embedding_provider=identity.provider,

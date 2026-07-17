@@ -53,10 +53,13 @@
 - production candidate 必须满足 no-match FPR=0、hard-negative forbidden=0、identity 与
   isolation forbidden=0、三个 isolation case 全过；否则 `no_candidate`。生产默认 threshold
   `0.5` 未修改。
+- 若 scan 完整但 candidate 实配复跑发生 database/Embedding/network error，report 必须为
+  `infrastructure_failed`、candidate 为 `candidate_not_evaluated`、ranking 为
+  `not_evaluated`、CLI 非零；不得伪装成质量 `no_candidate`。该状态机单测已覆盖。
 - 当前 Settings 没有独立 `MEMORY_EMBEDDING_*` 配置，真实 baseline 返回 pending/exit 3；没有
   从 Chat/RAG credential 回退，没有 API 调用，没有生成新 report，report SHA 为
   `not_generated (pending)`，candidate 结论为 `pending`。
-- 本轮回归：retrieval/embedding/backfill `42 passed`、M-P1 PG `7/7`、M-P2 PG `39/39`、
+- 本轮回归：retrieval/embedding/backfill `43 passed`、M-P1 PG `7/7`、M-P2 PG `39/39`、
   全量 stub `564 passed / 46 skipped`；最终静态与冻结 hash 门禁见 M-P1 plan 第 15 节。
 - 冻结 prompt、Memory Dataset v1、Judge、Graph、OpenAI tool schema SHA-256 均未变化。
 - 下一步是注入独立 Memory embedding 配置后只运行一次轻量真实 baseline，并提交脱敏

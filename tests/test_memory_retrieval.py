@@ -4,6 +4,7 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -275,6 +276,34 @@ async def test_candidate_is_reexecuted_with_actual_configuration_and_latency() -
     scan_point = next(point for point in report.scan if point.min_similarity == 0.6)
     assert scan_point.superset_scan_p50_latency_ms == 6.0
     assert scan_point.superset_scan_p95_latency_ms == 12.0
+
+
+@pytest.mark.asyncio
+async def test_candidate_rerun_infrastructure_failure_is_not_a_quality_no_candidate() -> None:
+    from scripts import run_memory_retrieval_baseline as baseline
+
+    runner = _runner(_PostgresRepository())
+    superset = _superset_observations(runner)
+    runner._execute_cases = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[(superset, []), ([], [("MPR01", "memory_store_unavailable")])]
+    )
+
+    report = await runner.run(
+        top_k_values=(3,),
+        min_similarity_values=(0.4, 0.6),
+    )
+
+    assert report.scan_status == "completed"
+    assert report.status == "infrastructure_failed"
+    assert report.production_retrieval_ranking == "not_evaluated"
+    assert report.production_candidate_status == "candidate_not_evaluated"
+    assert report.infrastructure_failures == 1
+    assert report.error_codes == ("memory_store_unavailable",)
+    assert report.candidate_evaluation is not None
+    assert report.candidate_evaluation.accepted is False
+    assert (report.selected_top_k, report.selected_min_similarity) == (None, None)
+    assert baseline._report_exit_code(SimpleNamespace(status=report.status)) == 1
+    assert baseline._report_exit_code(SimpleNamespace(status="completed")) == 0
 
 
 @pytest.mark.asyncio

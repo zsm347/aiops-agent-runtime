@@ -440,6 +440,20 @@ production candidate quality gate 必须同时满足：
 threshold 再执行全部 query，单独记录 actual candidate p50/p95，并再次检查同一 quality gate。
 report 同时记录 Pareto frontier 和质量残差。
 
+candidate 实配复跑的基础设施失败不是质量结论。若 scan 已完成、但第二次 query 出现 database、
+embedding 或网络错误，状态机必须为：
+
+```text
+report status=infrastructure_failed
+scan_status=completed
+production_retrieval_ranking=not_evaluated
+production_candidate_status=candidate_not_evaluated
+infrastructure_failures>0
+baseline CLI exit != 0
+```
+
+此时不允许把结果写成 `no_candidate`，也不允许把已收集的 scan 误报为完整 baseline。
+
 这只是 12-case dev pilot，不是 Holdout、规模压测、ANN 结论或正式 production calibration。
 即使产生 dev pilot candidate，也不修改生产默认 `memory_search_min_similarity=0.5`。
 
@@ -476,3 +490,8 @@ MODEL_PROVIDER=stub full suite:        564 passed, 46 skipped
 全量 46 skips 是未注入专用 URL 时的 39 个 M-P2 和 7 个 M-P1 PostgreSQL cases；两个真实 PG
 门禁已如上独立完整执行。Ruff、compileall、pip check、`git diff --check` 与冻结资产 hash 在
 最终提交前复核。
+
+M-P1-R1 独立审查发现 candidate rerun infrastructure failure 曾被归类为普通
+`no_candidate`。已新增 unit case 覆盖“scan 成功、candidate `_execute_cases` 返回
+`memory_store_unavailable`”：report 为 `infrastructure_failed`、candidate 为
+`candidate_not_evaluated`、selected 为 null、CLI 非零。整改后 retrieval 专项为 `43 passed`。

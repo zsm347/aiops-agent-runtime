@@ -1,6 +1,6 @@
 # 当前工作交接快照
 
-更新时间：2026-07-16（Asia/Shanghai）
+更新时间：2026-07-17（Asia/Shanghai）
 
 本文只记录当前可验证状态，供会话切换后继续推进；不替代各阶段正式计划和验收文档。
 
@@ -19,9 +19,9 @@
 
 ### M-P2 PostgreSQL 持久化
 
-状态：`PostgreSQL gate passed / pending independent acceptance`
+状态：`complete / independent acceptance passed`
 
-- Draft PR：`https://github.com/zsm347/aiops-agent-runtime/pull/1`。
+- PR：`https://github.com/zsm347/aiops-agent-runtime/pull/1`。
 - PostgreSQL 16.14、pgvector 0.8.5 一次性隔离数据库验收：39 planned、39 executed、
   0 skipped、39 passed、0 failed，权威脚本输出 `status=passed`。
 - 首次真实运行发现 Alembic validator 隐式事务未提交；修复 Alembic migration engine 的显式
@@ -30,7 +30,9 @@
   198、全量 stub 519 passed / 39 skipped、基础 eval 14/14；Ruff、compileall、pip check、
   diff check 通过。
 - prompt、Memory Dataset、Judge、Graph 与 OpenAI tool schema 冻结哈希未变化。
-- 技术负责人独立验收前不得把 PR 转 Ready，也不得标记 M-P2 complete。
+- 2026-07-17 技术负责人使用全新一次性 PostgreSQL 16.14 + pgvector 0.8.5
+  隔离集群独立复跑：真实 PostgreSQL `39 passed / 0 skipped`、全量 stub
+  `519 passed / 39 skipped`、基础 eval `14/14`，M-P2 独立验收通过。
 
 ### M-R1 生产 prompt、tool 语义与 Core no-op
 

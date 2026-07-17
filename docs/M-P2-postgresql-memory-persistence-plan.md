@@ -4,14 +4,14 @@
 
 ```text
 阶段：M-P2
-状态：PostgreSQL gate passed / pending independent acceptance
+状态：complete / independent acceptance passed
 目标：把 Core Memory 与 Archival Memory 的唯一事实源从进程内存迁移到 PostgreSQL
 前置：M-R1 complete、M-P0 complete
 后续：M-P1 真实 Embedding 与生产检索、M-P3 语义去重、10G.2B 生命周期治理
 ```
 
-本计划冻结 M-P2 的实现和验收边界。当前实现已通过真实 PostgreSQL gate，但仍需技术负责人
-独立验收；这不表示 M-P2 complete，也不表示长期记忆整体完成。
+本计划冻结 M-P2 的实现和验收边界。当前实现已通过真实 PostgreSQL gate 与技术负责人
+独立验收，M-P2 状态为 complete；这不表示长期记忆整体完成。
 
 ## 2. 设计依据与优先级
 
@@ -766,13 +766,17 @@ planned=39 executed=39 skipped=0 passed=39 failed=0 status=passed
 
 同轮回归为 M-P2 persistence/runtime/snapshot `137 passed`、长期记忆 `24 passed`、Memory
 eval `86 passed`、RAG B/C/D `198 passed`、全量 stub `519 passed, 39 skipped`、基础 eval
-`14/14`。当前状态只能标记：
+`14/14`。
+
+2026-07-17，技术负责人使用全新一次性 PostgreSQL 16.14 + pgvector 0.8.5 隔离集群
+独立复跑权威入口，结果同为 `39 passed / 0 skipped`；并复跑 persistence/runtime/snapshot
+`137 passed`、长期记忆 `24 passed`、Memory eval `86 passed`、全量 stub
+`519 passed / 39 skipped`、基础 eval `14/14`。代码审查未发现 M-P2 阻断项，冻结资产无越界
+变更。因此当前状态为：
 
 ```text
-PostgreSQL gate passed / pending independent acceptance
+complete / independent acceptance passed
 ```
-
-在独立验收明确通过前，不能标记 M-P2 complete。
 
 ## 19. 已知残余风险
 
@@ -821,6 +825,7 @@ M-P2 完成后仍存在：
 - [x] 真实 PostgreSQL 门禁包含旧 revision、脏数据和两个 OS subprocess。
 - [x] PostgreSQL 失败语义为 fail closed。
 - [x] 真实 PostgreSQL 是完成门禁，不用 SQLite 冒充。
+- [x] 技术负责人已在全新隔离 PostgreSQL 集群独立复跑并明确验收通过。
 - [x] prompt、tool schema、Dataset、Judge 不在修改范围。
 - [x] 已披露 Memory/trace 非原子限制。
 - [x] 已区分 implementation complete 与 M-P2 complete。

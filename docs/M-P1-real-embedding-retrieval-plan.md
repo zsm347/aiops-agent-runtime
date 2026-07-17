@@ -464,21 +464,55 @@ report 使用稳定、排序、紧凑 JSON 序列化。每个成功真实 baseli
 report/manifest 必须纳入 PR 证据。测试覆盖 report schema、逐 case observation、稳定序列化、
 Dataset drift 和 report manifest hash。
 
-本轮运行时 Settings 未配置独立 `MEMORY_EMBEDDING_*` provider/dimension/key/base URL。权威
-runner 在任何 API 调用前返回：
+M-P1-R1 初次整改时 Settings 未配置独立 `MEMORY_EMBEDDING_*`，runner 正确返回 pending。
+随后用户明确授权本次验收复用项目已有阿里云 key/base URL，并只在验收进程内显式映射为
+独立 Memory 配置；产品 builder 仍没有 Chat/RAG fallback，也没有读取、打印或修改 `.env`。
+唯一一次真实运行使用：
 
 ```text
-status=pending reason=MEMORY_EMBEDDING_configuration_missing exit_code=3
+provider=dashscope-openai-compatible
+model/version=text-embedding-v4
+dimension=1024
+planned=12 executed=12 skipped=0 infrastructure_failures=0
+scan_status=completed
+production_retrieval_ranking=evaluated
+production_candidate_status=no_candidate
+selected_top_k=null selected_min_similarity=null
 ```
 
-因此本轮没有真实 embedding API 调用，没有生成整改后的 report/manifest，report SHA 为
-`not_generated (pending)`，production candidate 结论为 `pending`。禁止使用 stub 或从
-Chat/RAG credential 映射来填补该证据。
+Semantic/no-match/isolation observation 数分别为 7/2/3。topK=3 scan：
+
+| threshold | HitRate@3 | Recall@3 | MRR | hard-negative forbidden | no-match FPR | isolation pass | identity/forbidden violations | gate |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 0.0 | 1.000 | 1.000 | 1.000 | 1 | 1.0 | 0/3 | 0/0 | fail |
+| 0.2 | 1.000 | 1.000 | 1.000 | 1 | 1.0 | 0/3 | 0/0 | fail |
+| 0.4 | 1.000 | 0.929 | 1.000 | 1 | 0.0 | 0/3 | 0/0 | fail |
+| 0.5 | 0.857 | 0.857 | 0.857 | 1 | 0.0 | 0/3 | 0/0 | fail |
+| 0.6 | 0.857 | 0.857 | 0.857 | 0 | 0.0 | 1/3 | 0/0 | fail |
+| 0.7 | 0.714 | 0.714 | 0.714 | 0 | 0.0 | 2/3 | 0/0 | fail |
+
+所有阈值均未满足 quality gate，因此没有 provisional candidate，没有 candidate 实配复跑，
+candidate actual p50/p95 为 null。结果说明没有跨 tenant/user/agent evidence 泄漏，但 primary
+scope 的弱相关结果仍使 isolation empty contract 失败；不得据此调高生产默认 threshold，也不得
+把任一失败点称为 production candidate。
+
+脱敏证据：
+
+```text
+report: artifacts/evals/memory_retrieval/20260717T133814Z-1.0.1-dev.json
+report SHA-256: e67f0fffadc9acfd441d22586456e1ff264d749067761fef29b21da981e8dc59
+manifest: artifacts/evals/memory_retrieval/20260717T133814Z-1.0.1-dev.manifest.json
+manifest SHA-256: aecc1ed4e00f9d06a7e3748a85a753846988e41b210a4afd80e11d835659e21b
+Dataset SHA-256: 007b2c17505784f53ab8937f19d243949a7899a7d6da256de62639d147ac3cbe
+```
+
+manifest 中固定的 report SHA 与实际文件完全一致；敏感标记扫描未发现 API key、authorization、
+DSN、host、tenant/user/agent ID 或 query/content 原文。
 
 ### 15.6 验收结果
 
-新建空 PostgreSQL 16.14 + pgvector 0.8.5 一次性数据库，执行后已删除数据库和角色并停止
-服务：
+新建空 PostgreSQL 16.14 + pgvector 0.8.5 一次性数据库执行真实 scan，之后已删除数据库和
+角色并停止服务：
 
 ```text
 M-P1 retrieval unit/embedding/backfill: 42 passed

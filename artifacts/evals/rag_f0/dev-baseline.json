@@ -1,0 +1,44 @@
+{
+  "ablations": {
+    "bm25_only": "not_available",
+    "dense_only": "not_available",
+    "hybrid": "infrastructure_pending: dedicated_postgres_not_confirmed"
+  },
+  "acceptance": "pending_independent_dataset_acceptance",
+  "baseline": "dense_native_bm25_rrf_k60_no_rerank",
+  "dataset_sha256": "0627e66b0b5b40cb1fbe326f2dfb980be2f43440d264056b5ebc774e157d26ec",
+  "dataset_version": "rag-f0-v1",
+  "dependency_versions": {
+    "llama-index-core": "0.14.23",
+    "llama-index-vector-stores-milvus": "1.1.0",
+    "milvus-lite": "3.0",
+    "openai": "2.45.0",
+    "pymilvus": "2.6.16"
+  },
+  "finished_at": "2026-07-17T08:16:24.219907Z",
+  "infrastructure_failure_count": 48,
+  "latency_ms": {
+    "p50": null,
+    "p95": null
+  },
+  "metrics": {},
+  "out_of_scope": {
+    "answer_generation": "out_of_scope",
+    "inactive_documents": "out_of_scope",
+    "knowledge_base_isolation": "out_of_scope",
+    "rerank": "out_of_scope",
+    "tenant_isolation": "out_of_scope"
+  },
+  "per_query": [],
+  "query_count": 48,
+  "retrieval_config": {
+    "default_final_top_k": 3,
+    "hybrid_top_k": 10,
+    "rerank_enabled": false,
+    "rrf_k": 60
+  },
+  "slice_metrics": {},
+  "split": "dev",
+  "started_at": "2026-07-17T08:16:24.219907Z",
+  "status": "infrastructure_pending"
+}

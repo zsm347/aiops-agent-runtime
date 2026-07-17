@@ -1,0 +1,36 @@
+{
+  "base_ref": "origin/main@1e06e550d478eed5073d20db4387a2ea7d4e2e2e",
+  "dependencies": {
+    "constraints/rag-integration.txt": {
+      "after_git_object": "c03a4a4c7a2aacbfade68e033aaa81cc0103cc58",
+      "before_git_object": "c03a4a4c7a2aacbfade68e033aaa81cc0103cc58"
+    }
+  },
+  "forbidden_scope": {
+    "evals/datasets/long_term_memory_v1.json": {
+      "after_git_object": "b4094d27632834fcd657c803868dfb5d496e603f",
+      "before_git_object": "b4094d27632834fcd657c803868dfb5d496e603f"
+    },
+    "prompts/ops-agent-system-v3.md": {
+      "after_git_object": "9e10828e0f4a8b6ed7a954704e5572cb1e9289ea",
+      "before_git_object": "9e10828e0f4a8b6ed7a954704e5572cb1e9289ea"
+    },
+    "src/superbiz_agent/evals/memory_cases.py": {
+      "after_git_object": "3c29a9056d1af3421aea4bdb42ea5b1ff97098fc",
+      "before_git_object": "3c29a9056d1af3421aea4bdb42ea5b1ff97098fc"
+    },
+    "src/superbiz_agent/evals/memory_runner.py": {
+      "after_git_object": "0688bd338a477983e1ed6047e3667219a94f8315",
+      "before_git_object": "0688bd338a477983e1ed6047e3667219a94f8315"
+    },
+    "src/superbiz_agent/harness/graph.py": {
+      "after_git_object": "6cfd14d94256c03d5745086f55139d10c8adc832",
+      "before_git_object": "6cfd14d94256c03d5745086f55139d10c8adc832"
+    },
+    "src/superbiz_agent/memory": {
+      "after_git_object": "faa99f09a1b3e266ba4d16c9e2f695efbd84d42f",
+      "before_git_object": "faa99f09a1b3e266ba4d16c9e2f695efbd84d42f"
+    }
+  },
+  "status": "unchanged"
+}

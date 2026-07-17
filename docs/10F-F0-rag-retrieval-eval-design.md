@@ -67,11 +67,28 @@ default KB resolver
   -> evidence mapping and metrics
 ```
 
-`scripts/run_rag_f0_baseline.py` requires explicit confirmation that PostgreSQL is dedicated to the
-evaluation. It uses `Settings()` at runtime, does not inspect or print `.env`, and never logs tokens or
-API keys. Missing credentials, disabled RAG, non-dedicated PostgreSQL, or unavailable services produce
-an `infrastructure_pending` artifact with no quality claims. Deterministic embeddings and fixtures are
-permitted only in unit tests, not in baseline artifacts.
+`scripts/run_rag_f0_baseline.py` is the only real F0 entrypoint; the eval module has no direct real
+runtime CLI. The script requires explicit confirmation plus exact expected PostgreSQL
+database and Milvus collection names. Database names must start with `superbiz_rag_f0_`; collection
+names must start with `rag_f0_`. The configured database name, CLI expectation, and
+`current_database()` must agree. The database must contain the operator-created marker from
+`scripts/setup_rag_f0_database.sql`, bound to the current Dataset SHA, and must be at Alembic head
+`20260714_01` with empty `rag_knowledge_base` and `rag_document` tables. The exact collection must
+not exist before the run. These checks establish ownership before any evaluation row or chunk is
+written; a Boolean confirmation alone is insufficient.
+
+After a preflight succeeds, the runner always deletes the F0 tenant's documents before its knowledge
+base and drops the collection that this invocation proved absent and then created. A failed run is
+cleaned in the same `finally` path. A completed quality artifact is written only after runtime and
+ingestion resources close and both PostgreSQL and Milvus cleanup succeed. Preflight, execution,
+partial-query, or cleanup failures produce an `infrastructure_pending` artifact with no aggregate
+quality metrics. A pre-existing collection is never claimed or dropped by the normal runner.
+Cleanup re-queries PostgreSQL and Milvus and fails closed if owned resources remain.
+
+The entrypoint uses `Settings()` at runtime, does not inspect or print `.env`, and never logs tokens or
+API keys. Missing credentials, disabled RAG, non-dedicated infrastructure, or unavailable services
+produce an `infrastructure_pending` artifact with no quality claims. Deterministic embeddings and
+fixtures are permitted only in unit tests, not in baseline artifacts.
 
 Dense-only and BM25-only ablations are `not_available` in F0 because the current project service
 contract exposes only scope-preserving hybrid retrieval. F0 does not bypass the service or add a
@@ -81,14 +98,19 @@ parallel Milvus query implementation to manufacture ablations.
 
 LlamaIndex Core 0.14.23 provides `HitRate`, `MRR`, `Precision`, `Recall`, `AveragePrecision`, and
 `NDCG` under `llama_index.core.evaluation.retrieval.metrics`. F0 uses these implementations rather
-than handwritten retrieval formulas. Empty answerable retrievals are represented by a guaranteed
-non-relevant sentinel because the upstream metric classes reject empty retrieved ID lists.
+than handwritten retrieval formulas. The installed `NDCG` implementation accepts only expected IDs,
+not graded qrel gains, so F0 reports it explicitly as binary nDCG. The Dataset retains graded
+`relevance` values for rationale and later evaluators, but F0 treats every qrel with relevance greater
+than zero as relevant. Empty answerable retrievals are represented by a guaranteed non-relevant
+sentinel because the upstream metric classes reject empty retrieved ID lists.
 
-Reported metrics are Recall@10, HitRate@3, MRR@10, nDCG@3, nDCG@10, Precision@3, diagnostic
-AveragePrecision@10, no-answer false-positive rate, and p50/p95 service latency. The report contains
-per-query rankings/scores, failure classes, macro and per-slice means, and deterministic query-level
-bootstrap 95% intervals. No-answer queries count any returned chunk as a false positive and are not
-passed through an LLM judge.
+Reported metrics are Recall@10, HitRate@3, MRR@10, binary nDCG@3, binary nDCG@10, Precision@3,
+diagnostic AveragePrecision@10, no-answer false-positive rate, and p50/p95 service latency. The report
+contains per-query rankings/scores, failure classes, macro and per-slice means, and deterministic
+query-level bootstrap 95% intervals. If any query has an infrastructure failure, macro, per-slice,
+and aggregate latency fields are empty; successful-query subsets are not presented as a baseline.
+No-answer queries count any returned chunk as a false positive and are not passed through an LLM
+judge.
 
 ## Interpretation
 

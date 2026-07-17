@@ -231,7 +231,7 @@ class RagF0EvidenceMapper:
 
 
 def default_rag_f0_dataset_path(project_root: Path | None = None) -> Path:
-    root = project_root or Path.cwd()
+    root = project_root or Path(__file__).resolve().parents[3]
     return root / "evals" / "datasets" / "rag_f0"
 
 

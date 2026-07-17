@@ -19,8 +19,14 @@ database. The runner therefore stopped at the mandatory preflight and wrote
 `dev-baseline.json` with `infrastructure_pending: dedicated_postgres_not_confirmed`.
 
 No query was executed, no real embedding request was made, and no deterministic or fixture result
-was substituted. Consequently this report contains no Recall, HitRate, MRR, nDCG, Precision,
+was substituted. Consequently this report contains no Recall, HitRate, MRR, binary nDCG, Precision,
 no-answer false-positive, latency, or per-slice quality claim.
+
+The remediated entrypoint additionally requires an exact F0-prefixed database name, an exact
+F0-prefixed collection name, a pre-created Dataset-SHA marker, the frozen Alembic head, empty RAG
+tables, and an absent collection. It removes all resources owned by the run in `finally`; cleanup
+failure prevents publication of completed quality metrics. These guards have been tested offline,
+but no real baseline was run during remediation.
 
 ## Required Error Analysis After Infrastructure Is Available
 

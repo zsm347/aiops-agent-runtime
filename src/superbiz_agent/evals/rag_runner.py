@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import argparse
-import asyncio
 import json
 import random
 import statistics
@@ -29,8 +27,6 @@ from superbiz_agent.evals.rag_cases import (
     RagF0Dataset,
     RagF0EvidenceMapper,
     RagF0Query,
-    default_rag_f0_dataset_path,
-    load_rag_f0_dataset,
 )
 from superbiz_agent.rag.models import RagRetrievalRequest, RagRetrievalScope
 from superbiz_agent.rag.retrieval import RagRetrievalService
@@ -116,9 +112,14 @@ class RagF0Runner:
             results.append(result)
             infrastructure_failures += result.failure is not None
 
-        metrics = self._aggregate_metrics(results)
-        slice_metrics = self._slice_metrics(results)
-        completed_latencies = [row.latency_ms for row in results if row.failure is None]
+        if infrastructure_failures:
+            metrics = {}
+            slice_metrics = {}
+            completed_latencies = []
+        else:
+            metrics = self._aggregate_metrics(results)
+            slice_metrics = self._slice_metrics(results)
+            completed_latencies = [row.latency_ms for row in results]
         return RagF0Report(
             status="completed" if infrastructure_failures == 0 else "infrastructure_pending",
             acceptance="pending_independent_dataset_acceptance",
@@ -289,8 +290,8 @@ def _query_metrics(
         "recall_at_10": _score(Recall(), expected, top10),
         "hit_rate_at_3": _score(HitRate(), expected, top3),
         "mrr_at_10": _score(MRR(), expected, top10),
-        "ndcg_at_3": _score(NDCG(), expected, top3),
-        "ndcg_at_10": _score(NDCG(), expected, top10),
+        "binary_ndcg_at_3": _score(NDCG(), expected, top3),
+        "binary_ndcg_at_10": _score(NDCG(), expected, top10),
         "precision_at_3": _score(Precision(), expected, top3),
         "average_precision_at_10": _score(AveragePrecision(), expected, top10),
     }
@@ -388,50 +389,3 @@ def infrastructure_pending_report(dataset: RagF0Dataset, failure: str) -> RagF0R
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-async def _run_cli(dataset_path: Path, output: Path) -> int:
-    dataset = load_rag_f0_dataset(dataset_path)
-    from superbiz_agent.config import Settings
-
-    settings = Settings()
-    if not settings.rag_enabled:
-        report = infrastructure_pending_report(dataset, "rag_enabled_false")
-        write_rag_f0_report(report, output)
-        return 2
-    if settings.rag_rerank_enabled:
-        raise RagF0ContractError("F0 requires rag_rerank_enabled=false")
-    eval_settings = settings.model_copy(update={"rag_hybrid_top_k": 10, "rag_final_top_k": 10})
-    try:
-        from superbiz_agent.rag.runtime import build_real_rag_retrieval_service
-
-        runtime = build_real_rag_retrieval_service(eval_settings)
-    except Exception as exc:
-        report = infrastructure_pending_report(dataset, exc.__class__.__name__)
-        write_rag_f0_report(report, output)
-        return 2
-    try:
-        report = await RagF0Runner(
-            retrieval_service=runtime,
-            dataset=dataset,
-        ).run_dev()
-        write_rag_f0_report(report, output)
-        return 0 if report.status == "completed" else 2
-    finally:
-        await runtime.aclose()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=Path, default=default_rag_f0_dataset_path())
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("artifacts/evals/rag_f0/dev-baseline.json"),
-    )
-    args = parser.parse_args()
-    raise SystemExit(asyncio.run(_run_cli(args.dataset, args.output)))
-
-
-if __name__ == "__main__":
-    main()

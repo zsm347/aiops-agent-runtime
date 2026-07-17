@@ -34,6 +34,29 @@
   隔离集群独立复跑：真实 PostgreSQL `39 passed / 0 skipped`、全量 stub
   `519 passed / 39 skipped`、基础 eval `14/14`，M-P2 独立验收通过。
 
+### M-P1 真实 Embedding 与 pgvector 检索
+
+状态：`real embedding and PostgreSQL baseline executed / pending independent acceptance`
+
+- 分支：`feat/m-p1-real-embedding-retrieval`。
+- PostgreSQL `16.14`、server pgvector `0.8.5`、Python pgvector `0.5.0`。
+- M-P1 真实 PostgreSQL gate：`7/7 passed, 0 skipped`；M-P2 回归 gate：`39/39 passed,
+  0 skipped`。
+- DashScope-compatible `text-embedding-v4`、1024 维真实 API + PostgreSQL dev baseline：
+  `12/12 executed`、0 infrastructure failure，production retrieval ranking 为 `evaluated`。
+- dev 选择点 `topK=3/min_similarity=0.4`：HitRate@3 `1.0`、Recall@3 `0.95`、MRR
+  `1.0`、no-match FPR `0.0`、identity violation `0`、p50 `185.93 ms`、p95
+  `287.42 ms`。
+- 已知质量残差：MPR03 hard-negative forbidden hit 1 次；MPR05 两个 gold 只召回一个。
+  没有为提高数字修改 Dataset/gold。
+- 回归：M-P1/M-P2 unit `148 passed`、长期记忆 `24 passed`、Memory eval `86 passed`、
+  RAG B/C/D `198 passed`、全量 stub `559 passed / 46 skipped`、基础 eval `14/14`；
+  Ruff、compileall、pip check、diff check 通过。
+- 冻结 prompt、Memory Dataset v1、Judge、Graph、OpenAI tool schema SHA-256 均未变化。
+- 下一步仅为技术负责人独立验收；不要转 Ready、不要合并、不要进入 M-P3。
+
+详见 `docs/M-P1-real-embedding-retrieval-plan.md`。
+
 ### M-R1 生产 prompt、tool 语义与 Core no-op
 
 实现状态：`implementation submitted / deterministic acceptance passed / real guardrails pending`

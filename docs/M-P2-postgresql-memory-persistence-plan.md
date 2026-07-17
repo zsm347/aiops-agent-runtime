@@ -784,7 +784,8 @@ M-P2 完成后仍存在：
 
 - local-deterministic 检索不代表生产语义质量。
 - M-P2 的 scoped candidate scan 和 Python cosine 不代表生产规模能力。
-- PostgreSQL vector 列尚未由 M-P1 正式接管。
+- M-P2 独立验收当时 PostgreSQL vector 列尚未由 M-P1 接管；后续 M-P1 分支现已执行真实
+  1024 维写入、backfill、pgvector 查询和 dev baseline，状态为 pending independent acceptance。
 - Memory 与 trace 不是同一事务。
 - PostgreSQL rollout event engine 的统一所有权和关闭仍是独立已知问题。
 - 没有 Archival 生命周期和冲突治理。

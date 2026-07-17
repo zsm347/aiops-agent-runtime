@@ -24,6 +24,29 @@ class MemoryStoreUnavailableError(MemoryPersistenceError):
         super().__init__("Long-term memory storage is temporarily unavailable.")
 
 
+class MemoryEmbeddingConfigurationError(MemoryPersistenceError):
+    code = "memory_embedding_configuration_error"
+
+    def __init__(self) -> None:
+        super().__init__("Long-term memory embedding configuration is invalid.")
+
+
+class MemoryEmbeddingContractError(MemoryPersistenceError):
+    code = "memory_embedding_contract_error"
+
+    def __init__(self) -> None:
+        super().__init__("Long-term memory embedding response violated the required contract.")
+
+
+class MemoryEmbeddingUnavailableError(MemoryPersistenceError):
+    code = "memory_embedding_unavailable"
+    status_code = 503
+    retryable = True
+
+    def __init__(self) -> None:
+        super().__init__("Long-term memory embedding is temporarily unavailable.")
+
+
 class MemoryStoreContractError(MemoryPersistenceError):
     code = "memory_store_contract_error"
 

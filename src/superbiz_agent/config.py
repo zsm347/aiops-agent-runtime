@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     # Compatibility-only: M-P0 archival writes no longer use embedding similarity.
     memory_duplicate_similarity: float = 0.92
     memory_embedding_dimension: int = 64
+    memory_embedding_provider: str = "local-deterministic"
+    memory_embedding_model: str = "local-deterministic"
+    memory_embedding_version: Optional[str] = "phase4-local"
+    memory_embedding_batch_size: int = Field(default=10, ge=1)
+    memory_embedding_base_url: Optional[str] = None
+    memory_embedding_api_key: Optional[str] = Field(default=None, repr=False)
+    memory_embedding_timeout_ms: int = Field(default=30_000, ge=1)
 
     prompt_dir: Path = Path("prompts")
     prompt_version: str = "ops-agent-system-v3"
@@ -116,6 +123,33 @@ class Settings(BaseSettings):
             raise ValueError(
                 "memory_store_backend cannot be 'postgres' when memory_enabled is false"
             )
+        provider = self.memory_embedding_provider.strip().lower()
+        if provider not in {
+            "local-deterministic",
+            "openai-compatible",
+            "dashscope-openai-compatible",
+        }:
+            raise ValueError("memory_embedding_provider is not supported")
+        object.__setattr__(self, "memory_embedding_provider", provider)
+        if not self.memory_embedding_model.strip():
+            raise ValueError("memory_embedding_model must not be blank")
+        if self.memory_embedding_version is None:
+            object.__setattr__(self, "memory_embedding_version", self.memory_embedding_model)
+        elif not self.memory_embedding_version.strip():
+            raise ValueError("memory_embedding_version must not be blank")
+        if provider == "local-deterministic":
+            if (
+                self.memory_store_backend == "postgres"
+                and self.app_env.strip().lower() not in {"local", "test"}
+            ):
+                raise ValueError(
+                    "local-deterministic memory embedding is not allowed for production postgres"
+                )
+        else:
+            if self.memory_embedding_dimension != 1024:
+                raise ValueError("real memory embedding dimension must be 1024")
+            if provider == "dashscope-openai-compatible" and self.memory_embedding_batch_size > 10:
+                raise ValueError("DashScope memory embedding batch size cannot exceed 10")
         return self
 
     @model_validator(mode="after")

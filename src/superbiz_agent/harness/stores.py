@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
 
 from superbiz_agent.harness.context import AgentRequestContext, RunContext
@@ -32,10 +33,20 @@ class RolloutEventStore(Protocol):
 
 
 class PostgresRolloutEventStore:
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, *, engine=None) -> None:
         self.repository = repository
+        self.engine = engine
+        self._lifecycle_lock = asyncio.Lock()
+        self._close_task: asyncio.Task[None] | None = None
+        self._closing = False
+        self._closed = False
+
+    def _ensure_open(self) -> None:
+        if self._closing or self._closed:
+            raise RuntimeError("PostgreSQL rollout event store is closing or closed.")
 
     async def append(self, event: RolloutEvent) -> RolloutEvent:
+        self._ensure_open()
         return await self.repository.insert(event)
 
     async def append_event(
@@ -47,6 +58,7 @@ class PostgresRolloutEventStore:
         message_id: str | None = None,
         tool_call_id: str | None = None,
     ) -> RolloutEvent:
+        self._ensure_open()
         from datetime import datetime, timezone
         from uuid import uuid4
 
@@ -68,6 +80,7 @@ class PostgresRolloutEventStore:
         return await self.append(event)
 
     async def list_by_session(self, context: AgentRequestContext) -> list[RolloutEvent]:
+        self._ensure_open()
         return await self.repository.list_by_session(
             tenant_id=context.tenant_id or "",
             user_id=context.user_id or "",
@@ -76,12 +89,31 @@ class PostgresRolloutEventStore:
         )
 
     async def list_by_run(self, tenant_id: str, run_id: str) -> list[RolloutEvent]:
+        self._ensure_open()
         return await self.repository.list_by_run(tenant_id=tenant_id, run_id=run_id)
 
     async def clear_session(self, context: AgentRequestContext) -> None:
+        self._ensure_open()
         await self.repository.clear_session(
             tenant_id=context.tenant_id or "",
             user_id=context.user_id or "",
             agent_id=context.agent_id or "",
             session_id=context.session_id or "",
         )
+
+    async def aclose(self) -> None:
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closing = True
+            task = self._close_task
+            if task is None or task.done():
+                task = asyncio.create_task(self._dispose_engine())
+                self._close_task = task
+        await asyncio.shield(task)
+
+    async def _dispose_engine(self) -> None:
+        if self.engine is not None:
+            await self.engine.dispose()
+        async with self._lifecycle_lock:
+            self._closed = True

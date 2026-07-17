@@ -196,6 +196,8 @@ class MemoryEvalRunner:
         retrieval_judge: MemoryRetrievalJudge | None = None,
         use_judge: MemoryUseJudge | None = None,
     ) -> None:
+        if not settings.memory_enabled or settings.memory_store_backend != "memory":
+            raise ValueError("memory evaluation requires memory_store_backend='memory'")
         self.settings = settings
         self.service_factory = service_factory or _default_service_factory
         self.scripted_gateway_factory = scripted_gateway_factory
@@ -347,15 +349,30 @@ class MemoryEvalRunner:
         gateway = self._gateway_for(case, repetition, config.mode)
         capturing_gateway = CapturingModelGateway(gateway)
         service = self.service_factory(self.settings, capturing_gateway)
+        try:
+            return await self._execute_case(case, repetition, service, capturing_gateway)
+        finally:
+            await service.aclose()
+
+    async def _execute_case(
+        self,
+        case: MemoryEvalCase,
+        repetition: int,
+        service: AgentHarnessService,
+        capturing_gateway: CapturingModelGateway,
+    ) -> MemoryEvalCaseResult:
         if service.memory_runtime is None:
             raise RuntimeError("memory evaluation requires an enabled memory runtime")
         seeder = MemoryFixtureSeeder(service.memory_runtime)
-        snapshots = MemorySnapshotProvider(service.memory_runtime.store)
-        fixture_ids = self._seed_case(case, seeder)
-        before = {
-            key: snapshots.capture(identity.tenant_id, identity.user_id, identity.agent_id)
-            for key, identity in case.identities.items()
-        }
+        snapshots = MemorySnapshotProvider(service.memory_runtime.inspection_repository)
+        fixture_ids = await self._seed_case(case, seeder)
+        before = {}
+        for key, identity in case.identities.items():
+            before[key] = await snapshots.capture(
+                identity.tenant_id,
+                identity.user_id,
+                identity.agent_id,
+            )
         artifact = MemoryEvalArtifact(
             case_id=case.case_id,
             repetition=repetition,
@@ -404,10 +421,13 @@ class MemoryEvalRunner:
             )
             for name, count in turn_artifact.token_usage.items():
                 all_usage[name] += count
-        artifact.after_snapshots = {
-            key: snapshots.capture(identity.tenant_id, identity.user_id, identity.agent_id)
-            for key, identity in case.identities.items()
-        }
+        artifact.after_snapshots = {}
+        for key, identity in case.identities.items():
+            artifact.after_snapshots[key] = await snapshots.capture(
+                identity.tenant_id,
+                identity.user_id,
+                identity.agent_id,
+            )
         artifact.total_latency_ms = int((perf_counter() - case_started) * 1000)
         artifact.token_usage = dict(all_usage)
         artifact.tool_schema_hash = _tool_schema_hash(artifact)
@@ -454,7 +474,10 @@ class MemoryEvalRunner:
         return build_model_gateway(self.settings)
 
     @staticmethod
-    def _seed_case(case: MemoryEvalCase, seeder: MemoryFixtureSeeder) -> dict[str, str]:
+    async def _seed_case(
+        case: MemoryEvalCase,
+        seeder: MemoryFixtureSeeder,
+    ) -> dict[str, str]:
         core_by_identity: dict[str, dict[str, CoreMemoryFixture]] = defaultdict(dict)
         for block in case.initial_memory.core_blocks:
             core_by_identity[block.identity][block.block_key] = _core_fixture(block)
@@ -463,7 +486,7 @@ class MemoryEvalRunner:
             archival_by_identity[memory.identity].append(_archival_fixture(memory))
         fixture_ids: dict[str, str] = {}
         for key, identity in case.identities.items():
-            seeded = seeder.seed(
+            seeded = await seeder.seed(
                 identity.tenant_id,
                 identity.user_id,
                 identity.agent_id,
@@ -976,6 +999,8 @@ def _required_file_hash(path: Path) -> str:
 
 def _configured_tool_schema_fingerprint(settings: Settings) -> str:
     """Hash the active tool contract without constructing a provider client."""
+    if not settings.memory_enabled or settings.memory_store_backend != "memory":
+        raise ValueError("memory tool schema requires memory_store_backend='memory'")
     trace_store = InMemoryRolloutEventStore()
     memory_runtime = build_memory_runtime(settings, trace_store=trace_store)
     definitions = build_builtin_tools(list(memory_runtime.tools))

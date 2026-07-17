@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from superbiz_agent.memory.store import InMemoryMemoryStore
+from superbiz_agent.memory.ports import MemoryInspectionRepository
 
 
 @dataclass(frozen=True)
@@ -46,10 +46,10 @@ class MemorySnapshot:
 class MemorySnapshotProvider:
     """Capture immutable eval snapshots through read-only store APIs."""
 
-    def __init__(self, store: InMemoryMemoryStore) -> None:
-        self.store = store
+    def __init__(self, repository: MemoryInspectionRepository) -> None:
+        self.repository = repository
 
-    def capture(
+    async def capture(
         self,
         tenant_id: str,
         user_id: str,
@@ -69,7 +69,7 @@ class MemorySnapshotProvider:
                 max_tokens=block.max_tokens,
                 status=block.status,
             )
-            for block in self.store.list_core_blocks_for_scope(
+            for block in await self.repository.list_core_blocks_for_scope(
                 tenant_id,
                 user_id,
                 agent_id,
@@ -88,7 +88,7 @@ class MemorySnapshotProvider:
                 status=memory.status,
                 usage_count=memory.usage_count,
             )
-            for memory in self.store.list_memories_for_scope(
+            for memory in await self.repository.list_memories_for_scope(
                 tenant_id,
                 user_id,
                 agent_id,

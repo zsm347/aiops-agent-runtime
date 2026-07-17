@@ -69,10 +69,14 @@ class AgentHarnessService:
         self.memory_runtime = memory_runtime
         self.rag_retrieval_service = rag_retrieval_service
         self.lock_manager = lock_manager or ConversationLockManager()
-        self._close_lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
         self._closing = False
         self._closed = False
+        self._ready_task: asyncio.Task[None] | None = None
+        self._memory_closed = memory_runtime is None
+        self._rag_closed = not callable(getattr(rag_retrieval_service, "aclose", None))
+        self._trace_closed = not callable(getattr(trace_store, "aclose", None))
 
     @classmethod
     def build_default(
@@ -84,6 +88,11 @@ class AgentHarnessService:
         memory_runtime: MemoryRuntimeComponents | None = None,
         rag_retrieval_service: RagRetrievalService | None = None,
     ) -> "AgentHarnessService":
+        if (
+            memory_runtime is not None
+            and memory_runtime.backend != settings.memory_store_backend
+        ):
+            raise ValueError("memory_runtime backend does not match Settings")
         tool_registry = ToolRegistry(schema_version=settings.tool_schema_version)
         prompt_registry = PromptRegistry(settings.resolve_prompt_dir())
         resolved_trace_store = trace_store or (
@@ -140,6 +149,9 @@ class AgentHarnessService:
             tool_schema_version=tool_registry.schema_version or "",
             model_provider=settings.model_provider,
             context_manager=context_manager,
+            core_version_snapshots=(
+                memory_runtime.core_version_snapshots if memory_runtime is not None else None
+            ),
         )
         graph = SkeletonAgentGraph(
             model_gateway=resolved_model_gateway,
@@ -167,7 +179,7 @@ class AgentHarnessService:
             engine = create_engine(settings.database_url)
             sessionmaker = create_sessionmaker(engine)
             repository = RolloutEventRepository(sessionmaker)
-            return PostgresRolloutEventStore(repository)
+            return PostgresRolloutEventStore(repository, engine=engine)
         return InMemoryRolloutEventStore()
 
     @staticmethod
@@ -186,6 +198,32 @@ class AgentHarnessService:
 
         return cls.build_default(get_settings())
 
+    async def astart(self) -> None:
+        """Actively verify backend readiness before serving requests.
+
+        FastAPI lifespan calls this so a misconfigured ``postgres`` memory
+        backend fails closed at startup instead of serving silently broken
+        memory. The probe runs at most once and is shared by all waiters.
+        """
+        await self.ensure_ready()
+
+    async def ensure_ready(self) -> None:
+        """Defensive readiness check used directly by ``chat``/``chat_stream``."""
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise RuntimeError("Harness service is closing or closed.")
+            if self._ready_task is None:
+                self._ready_task = asyncio.ensure_future(self._readiness_probe())
+            task = self._ready_task
+        await asyncio.shield(task)
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise RuntimeError("Harness service is closing or closed.")
+
+    async def _readiness_probe(self) -> None:
+        if self.memory_runtime is not None and self.memory_runtime.backend == "postgres":
+            await self.memory_runtime.ensure_ready()
+
     async def chat(self, context: AgentRequestContext, question: str) -> AgentChatResult:
         if not question.strip():
             return AgentChatResult(
@@ -197,6 +235,7 @@ class AgentHarnessService:
         async with self.lock_manager.acquire(context):
             run_context = None
             try:
+                await self.ensure_ready()
                 run_context = await self.runtime.start_run(context, question)
                 await self.runtime.append_user_message(run_context, question)
                 assembled = await self.runtime.assemble_context(run_context, question)
@@ -240,6 +279,7 @@ class AgentHarnessService:
             run_context = None
             answer = ""
             try:
+                await self.ensure_ready()
                 run_context = await self.runtime.start_run(context, question)
                 await self.runtime.append_user_message(run_context, question)
                 assembled = await self.runtime.assemble_context(run_context, question)
@@ -290,7 +330,7 @@ class AgentHarnessService:
         await self.trace_store.clear_session(context)
 
     async def aclose(self) -> None:
-        async with self._close_lock:
+        async with self._lifecycle_lock:
             if self._closed:
                 return
             self._closing = True
@@ -301,13 +341,38 @@ class AgentHarnessService:
         await asyncio.shield(task)
 
     async def _close_resources(self) -> None:
+        failures: list[tuple[str, BaseException]] = []
+        async with self._lifecycle_lock:
+            ready_task = self._ready_task
+        if ready_task is not None:
+            try:
+                await asyncio.shield(ready_task)
+            except (Exception, asyncio.CancelledError):
+                pass
+        if not self._memory_closed and self.memory_runtime is not None:
+            try:
+                await self.memory_runtime.aclose()
+                self._memory_closed = True
+            except (Exception, asyncio.CancelledError) as exc:
+                failures.append(("memory_runtime", exc))
         close = getattr(self.rag_retrieval_service, "aclose", None)
-        if callable(close):
+        if not self._rag_closed and callable(close):
             try:
                 await close()
-            except (Exception, asyncio.CancelledError):
-                raise RuntimeError("Failed to close Harness resources: rag_runtime.") from None
-        async with self._close_lock:
+                self._rag_closed = True
+            except (Exception, asyncio.CancelledError) as exc:
+                failures.append(("rag_runtime", exc))
+        close_trace = getattr(self.trace_store, "aclose", None)
+        if not self._trace_closed and callable(close_trace):
+            try:
+                await close_trace()
+                self._trace_closed = True
+            except (Exception, asyncio.CancelledError) as exc:
+                failures.append(("rollout_store", exc))
+        if failures:
+            detail = ", ".join(f"{label}: {type(exc).__name__}" for label, exc in failures)
+            raise RuntimeError(f"Failed to close Harness resources: {detail}") from None
+        async with self._lifecycle_lock:
             self._closed = True
 
     async def session_info(self, context: AgentRequestContext) -> SessionInfo:

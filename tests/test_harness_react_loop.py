@@ -532,6 +532,8 @@ async def test_chat_stream_cancellation_cleans_runtime_and_graph_state() -> None
 
     assert active_run_id not in service.runtime._active_history_by_run
     assert active_run_id not in service.runtime._history_events_by_run
+    assert service.memory_runtime is not None
+    assert not service.memory_runtime.core_version_snapshots.contains(active_run_id)
     assert graph.cleaned == [active_run_id]
 
 

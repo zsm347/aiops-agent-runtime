@@ -5,10 +5,12 @@ import threading
 from copy import deepcopy
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Literal
 
-from superbiz_agent.memory.dedup import canonical_content_hash
+from superbiz_agent.memory.dedup import canonical_content_hash, stable_tag_union
+from superbiz_agent.memory.errors import CoreMemoryContractError
+from superbiz_agent.memory.ports import ExactMemoryWriteResult
 from superbiz_agent.memory.schemas import (
     CORE_BLOCK_SPECS,
     DEFAULT_CORE_BLOCK_KEYS,
@@ -18,14 +20,6 @@ from superbiz_agent.memory.schemas import (
     MemoryTopicSummary,
     utc_now,
 )
-
-
-@dataclass(frozen=True)
-class ExactMemoryWriteResult:
-    status: Literal["written", "duplicate_skipped"]
-    memory: LongTermMemory
-    metadata_merged: bool
-
 
 def content_hash(content: str | None) -> str:
     if content is None or not content.strip():
@@ -52,6 +46,53 @@ class InMemoryMemoryStore:
                 ) is not None
                 and block.status == "active"
             ]
+
+    def ensure_default_core_blocks(
+        self,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+    ) -> list[CoreMemoryBlock]:
+        """Atomically initialize and return the three active default blocks."""
+
+        with self._lock:
+            existing = {
+                block_key: self._core_blocks.get(
+                    (tenant_id, user_id, agent_id, block_key)
+                )
+                for block_key in DEFAULT_CORE_BLOCK_KEYS
+            }
+            if any(
+                block is not None
+                and not _valid_existing_default_core_block(
+                    block,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    block_key=block_key,
+                )
+                for block_key, block in existing.items()
+            ):
+                raise CoreMemoryContractError()
+
+            blocks: list[CoreMemoryBlock] = []
+            for block_key in DEFAULT_CORE_BLOCK_KEYS:
+                key = (tenant_id, user_id, agent_id, block_key)
+                block = existing[block_key]
+                if block is None:
+                    spec = CORE_BLOCK_SPECS[block_key]
+                    block = CoreMemoryBlock(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        agent_id=agent_id,
+                        block_key=block_key,
+                        description=spec.description,
+                        max_tokens=spec.max_tokens,
+                        content_hash=content_hash(""),
+                    )
+                    self._core_blocks[key] = block
+                blocks.append(block)
+            return blocks
 
     def list_core_blocks_for_scope(
         self,
@@ -122,6 +163,41 @@ class InMemoryMemoryStore:
             self._core_blocks[key] = updated
             return updated
 
+    def cas_replace_core_content(
+        self,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+        block_key: str,
+        content: str,
+        *,
+        expected_version: int,
+    ) -> tuple[
+        Literal["updated", "unchanged", "conflict", "inactive", "read_only"],
+        CoreMemoryBlock | None,
+    ]:
+        with self._lock:
+            key = (tenant_id, user_id, agent_id, block_key)
+            current = self._core_blocks.get(key)
+            if current is None or current.status != "active":
+                return "inactive", current
+            if current.read_only:
+                return "read_only", current
+            target_hash = content_hash(content)
+            if current.content_hash == target_hash:
+                return "unchanged", current
+            if current.version != expected_version:
+                return "conflict", current
+            updated = replace(
+                current,
+                content=content,
+                content_hash=target_hash,
+                version=current.version + 1,
+                updated_at=utc_now(),
+            )
+            self._core_blocks[key] = updated
+            return "updated", updated
+
     def insert_memory(self, memory: LongTermMemory) -> LongTermMemory:
         with self._lock:
             self._memories[memory.id] = memory
@@ -136,7 +212,7 @@ class InMemoryMemoryStore:
         candidate = replace(
             memory,
             content_hash=canonical_hash,
-            tags=_stable_tag_union([], memory.tags),
+            tags=stable_tag_union([], memory.tags),
         )
         candidate_key = _archival_exact_key(candidate)
         with self._lock:
@@ -155,7 +231,7 @@ class InMemoryMemoryStore:
                 )
 
             existing = min(equivalents, key=lambda item: (item.created_at, item.id))
-            merged_tags = _stable_tag_union(existing.tags, candidate.tags)
+            merged_tags = stable_tag_union(existing.tags, candidate.tags)
             metadata_merged = merged_tags != existing.tags
             updated = replace(
                 existing,
@@ -324,16 +400,31 @@ def _archival_exact_key(
     )
 
 
-def _stable_tag_union(existing: Iterable[str], incoming: Iterable[str]) -> list[str]:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for raw_tag in (*existing, *incoming):
-        tag = raw_tag.strip()
-        if not tag or tag in seen:
-            continue
-        merged.append(tag)
-        seen.add(tag)
-    return merged
+def _valid_existing_default_core_block(
+    block: CoreMemoryBlock,
+    *,
+    tenant_id: str,
+    user_id: str,
+    agent_id: str,
+    block_key: str,
+) -> bool:
+    return (
+        isinstance(block.id, str)
+        and bool(block.id.strip())
+        and block.tenant_id == tenant_id
+        and block.user_id == user_id
+        and block.agent_id == agent_id
+        and block.block_key == block_key
+        and block.status == "active"
+        and isinstance(block.version, int)
+        and not isinstance(block.version, bool)
+        and block.version >= 1
+        and isinstance(block.max_tokens, int)
+        and not isinstance(block.max_tokens, bool)
+        and block.max_tokens > 0
+        and isinstance(block.content, str)
+        and block.content_hash == content_hash(block.content)
+    )
 
 
 def confidence_label_for(similarity: float) -> str | None:

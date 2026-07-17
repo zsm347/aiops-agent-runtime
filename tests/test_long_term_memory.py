@@ -11,6 +11,7 @@ from superbiz_agent.harness.context_assembler import ContextAssembler
 from superbiz_agent.harness.events import RolloutEventType
 from superbiz_agent.harness.service import AgentHarnessService
 from superbiz_agent.memory.archival import ArchivalMemoryService
+from superbiz_agent.memory.adapters.in_memory import InMemoryMemoryRepository
 from superbiz_agent.memory.core import CoreMemoryService
 from superbiz_agent.memory.dedup import (
     canonical_content_hash,
@@ -19,6 +20,7 @@ from superbiz_agent.memory.dedup import (
 from superbiz_agent.memory.embedding import DeterministicEmbeddingService
 from superbiz_agent.memory.index import MemoryContextProvider, MemoryIndexService
 from superbiz_agent.memory.policy import MemoryWritePolicy
+from superbiz_agent.memory.run_snapshots import CoreVersionSnapshotRegistry
 from superbiz_agent.memory.search import MemorySearchService
 from superbiz_agent.memory.schemas import LongTermMemory
 from superbiz_agent.memory.store import InMemoryMemoryStore
@@ -33,12 +35,14 @@ from superbiz_agent.tools.errors import ToolErrorType
 
 def _memory_services():
     store = InMemoryMemoryStore()
+    repository = InMemoryMemoryRepository(store)
     policy = MemoryWritePolicy()
     embedding = DeterministicEmbeddingService()
-    core = CoreMemoryService(store, policy)
-    search = MemorySearchService(store, embedding)
-    archival = ArchivalMemoryService(store, policy, embedding)
-    index = MemoryIndexService(store, search)
+    snapshots = CoreVersionSnapshotRegistry()
+    core = CoreMemoryService(repository, policy, snapshots)
+    search = MemorySearchService(repository, embedding)
+    archival = ArchivalMemoryService(repository, policy, embedding)
+    index = MemoryIndexService(repository, search)
     return store, policy, core, archival, search, index
 
 
@@ -84,9 +88,10 @@ def _memory_record(**overrides: object) -> LongTermMemory:
     return LongTermMemory(**values)  # type: ignore[arg-type]
 
 
-def test_core_memory_defaults_xml_and_policy_rejections() -> None:
+@pytest.mark.asyncio
+async def test_core_memory_defaults_xml_and_policy_rejections() -> None:
     _store, policy, core, _archival, _search, _index = _memory_services()
-    blocks = core.load_blocks("tenant", "user", "agent")
+    blocks = await core.load_blocks("tenant", "user", "agent")
 
     assert [block.block_key for block in blocks] == [
         "user_rules",
@@ -94,7 +99,7 @@ def test_core_memory_defaults_xml_and_policy_rejections() -> None:
         "service_notes",
     ]
     assert [block.max_tokens for block in blocks] == [300, 500, 600]
-    xml = core.build_context_block("tenant", "user", "agent")
+    xml = core.build_context_block(blocks)
     assert xml.startswith("<core_memory>")
     assert 'key="user_rules"' in xml
     assert "max_tokens=300" in xml
@@ -118,6 +123,7 @@ async def test_core_update_success_version_and_forbidden_content() -> None:
             auth_mode="dev_headers",
         )
     )
+    await service.runtime.assemble_context(run_context, "更新长期规则")
 
     updated = await gateway.execute(
         run_context,
@@ -133,7 +139,7 @@ async def test_core_update_success_version_and_forbidden_content() -> None:
     )
     updated_block = next(
         block
-        for block in service.memory_runtime.core_service.load_blocks("tm", "um", "am")
+        for block in await service.memory_runtime.core_service.load_blocks("tm", "um", "am")
         if block.block_key == "user_rules"
     )
     unchanged = await gateway.execute(
@@ -150,7 +156,7 @@ async def test_core_update_success_version_and_forbidden_content() -> None:
     )
     unchanged_block = next(
         block
-        for block in service.memory_runtime.core_service.load_blocks("tm", "um", "am")
+        for block in await service.memory_runtime.core_service.load_blocks("tm", "um", "am")
         if block.block_key == "user_rules"
     )
     invalid = await gateway.execute(
@@ -295,7 +301,7 @@ async def test_archival_save_dedupe_search_filters_usage_and_index() -> None:
     assert "payment-service" in multi_tag_search.result["memories"][0]["content"]
     assert topics.result["topics"][0]["topic"] == "order-service/5xx"
 
-    metadata = service.runtime.context_assembler.memory_context_provider.index_service.build_index(
+    metadata = await service.runtime.context_assembler.memory_context_provider.index_service.build_index(
         "ta",
         "ua",
         "aa",
@@ -429,7 +435,8 @@ def test_concurrent_exact_writes_create_only_one_active_memory() -> None:
     assert set(active[0].tags) == {f"tag-{index}" for index in range(24)}
 
 
-def test_semantically_similar_content_is_not_deduped_without_canonical_match() -> None:
+@pytest.mark.asyncio
+async def test_semantically_similar_content_is_not_deduped_without_canonical_match() -> None:
     store, _policy, _core, archival, _search, _index = _memory_services()
     context = _run_context()
     first_content = (
@@ -444,13 +451,13 @@ def test_semantically_similar_content_is_not_deduped_without_canonical_match() -
         embedding.embed(second_content),
     )
 
-    first = archival.save_archival_memory(
+    first = await archival.save_archival_memory(
         context,
         topic="first-topic",
         content=first_content,
         scope_service="order-service",
     )
-    second = archival.save_archival_memory(
+    second = await archival.save_archival_memory(
         context,
         topic="second-topic",
         content=second_content,
@@ -515,8 +522,11 @@ async def test_exact_dedupe_trace_records_metadata_merge_without_internal_identi
         for event in events
         if event.event_type == RolloutEventType.ARCHIVAL_MEMORY_DUPLICATE_SKIPPED
     )
-    stored = service.memory_runtime.store.active_memories(
-        "trace-tenant", "trace-user", "trace-agent"
+    stored = await service.memory_runtime.inspection_repository.list_memories_for_scope(
+        "trace-tenant",
+        "trace-user",
+        "trace-agent",
+        statuses=["active"],
     )
 
     assert first.result["status"] == "written"
@@ -576,8 +586,11 @@ async def test_archival_rejects_content_without_canonical_meaning(
     assert "cannot consist only of whitespace or sentence-ending punctuation" in (
         rejected.result["message"]
     )
-    assert service.memory_runtime.store.active_memories(
-        "meaning-tenant", "meaning-user", "meaning-agent"
+    assert await service.memory_runtime.inspection_repository.list_memories_for_scope(
+        "meaning-tenant",
+        "meaning-user",
+        "meaning-agent",
+        statuses=["active"],
     ) == []
     assert RolloutEventType.ARCHIVAL_MEMORY_WRITTEN not in {
         event.event_type for event in events
@@ -625,8 +638,11 @@ async def test_meaningful_terminal_punctuation_still_writes_and_exact_dedupes() 
     assert written.result["status"] == "written"
     assert duplicate.result["status"] == "duplicate_skipped"
     assert len(
-        service.memory_runtime.store.active_memories(
-            "valid-tenant", "valid-user", "valid-agent"
+        await service.memory_runtime.inspection_repository.list_memories_for_scope(
+            "valid-tenant",
+            "valid-user",
+            "valid-agent",
+            statuses=["active"],
         )
     ) == 1
 
@@ -748,18 +764,21 @@ def test_memory_tools_registered_schema_policy_and_requires_context() -> None:
     assert "any-match" in openai_properties["tags"]["description"]
 
 
-def test_context_assembler_injects_core_then_index_then_history_then_user() -> None:
+@pytest.mark.asyncio
+async def test_context_assembler_injects_core_then_index_then_history_then_user() -> None:
     _store, _policy, core, _archival, search, index = _memory_services()
-    provider = MemoryContextProvider(core, index)
+    snapshots = core.snapshots
+    provider = MemoryContextProvider(core, index, snapshots)
     assembler = ContextAssembler(
         PromptRegistry(Path(__file__).resolve().parents[1] / "prompts"),
         memory_context_provider=provider,
     )
-    assembled = assembler.assemble(
+    run_context = _run_context("tc", "uc", "ac", "sc")
+    assembled = await assembler.assemble(
         prompt_version="ops-agent-system-v2",
         active_history=[ModelMessage(role="assistant", content="历史回答")],
         current_user_message="当前问题",
-        request_context=AgentRequestContext("tc", "uc", "ac", "sc"),
+        run_context=run_context,
     )
 
     assert [message.role for message in assembled.messages] == [

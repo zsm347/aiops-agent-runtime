@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+from collections import Counter
+import logging
+import math
+
 from superbiz_agent.memory.embedding import DeterministicEmbeddingService
+from superbiz_agent.memory.ports import MemoryRepository
 from superbiz_agent.memory.schemas import MemorySearchResult, MemoryTopicSummary
-from superbiz_agent.memory.store import InMemoryMemoryStore
+from superbiz_agent.memory.store import confidence_label_for
 
 
 SEARCHABLE_TYPES = ["experience", "knowledge"]
+logger = logging.getLogger(__name__)
 
 
 class MemorySearchService:
     def __init__(
         self,
-        store: InMemoryMemoryStore,
+        repository: MemoryRepository,
         embedding_service: DeterministicEmbeddingService,
         *,
         top_k: int = 3,
@@ -19,14 +25,14 @@ class MemorySearchService:
         topics_max: int = 30,
         topics_per_type: int = 20,
     ) -> None:
-        self.store = store
+        self.repository = repository
         self.embedding_service = embedding_service
         self.top_k = top_k
         self.min_similarity = min_similarity
         self.topics_max = topics_max
         self.topics_per_type = topics_per_type
 
-    def search_memory(
+    async def search_memory(
         self,
         tenant_id: str,
         user_id: str,
@@ -43,7 +49,7 @@ class MemorySearchService:
         if not types:
             return []
         query_embedding = self.embedding_service.embed(query)
-        memories = self.store.active_memories(
+        memories = await self.repository.list_active_memories(
             tenant_id,
             user_id,
             agent_id,
@@ -52,21 +58,53 @@ class MemorySearchService:
             scope_env=_blank_to_none(scope_env),
             tags=tags,
         )
-        similarities = {
-            memory.id: self.embedding_service.cosine_similarity(query_embedding, memory.embedding)
-            for memory in memories
-        }
+        similarities = {}
+        for memory in memories:
+            embedding = memory.embedding
+            if (
+                len(embedding) != self.embedding_service.dimension
+                or any(not math.isfinite(value) for value in embedding)
+            ):
+                embedding = self.embedding_service.embed(memory.content)
+            similarities[memory.id] = self.embedding_service.cosine_similarity(
+                query_embedding,
+                embedding,
+            )
         threshold = self.min_similarity if min_similarity is None else min_similarity
         selected_memories = [
             memory for memory in memories if similarities.get(memory.id, 0.0) >= threshold
         ]
         selected_memories.sort(key=lambda memory: (-similarities[memory.id], memory.id))
         selected_memories = selected_memories[: max(0, self.top_k)]
-        results = self.store.search_results_from_memories(selected_memories, similarities)
-        self.store.mark_returned(tenant_id, user_id, agent_id, [result.id for result in results])
+        results = [
+            MemorySearchResult(
+                id=memory.id,
+                type=memory.type,
+                topic=memory.topic,
+                content=memory.content,
+                source=memory.source,
+                similarity=similarities[memory.id],
+                usage_count=memory.usage_count,
+                last_used_at=memory.last_used_at,
+                scope_service=memory.scope_service,
+                scope_env=memory.scope_env,
+                tags=list(memory.tags),
+                confidence_label=confidence_label_for(similarities[memory.id]),
+            )
+            for memory in selected_memories
+        ]
+        try:
+            await self.repository.mark_returned(
+                tenant_id,
+                user_id,
+                agent_id,
+                [result.id for result in results],
+            )
+        except Exception:
+            logger.warning("memory_usage_update_failed")
         return results
 
-    def list_memory_topics(
+    async def list_memory_topics(
         self,
         tenant_id: str,
         user_id: str,
@@ -76,13 +114,19 @@ class MemorySearchService:
         types = searchable_types(optional_type)
         if not types:
             return []
-        topics = self.store.list_topics(
+        memories = await self.repository.list_active_memories(
             tenant_id,
             user_id,
             agent_id,
-            types,
-            self.topics_per_type,
+            types=types,
         )
+        topics: list[MemoryTopicSummary] = []
+        for memory_type in types:
+            counts = Counter(memory.topic for memory in memories if memory.type == memory_type)
+            topics.extend(
+                MemoryTopicSummary(type=memory_type, topic=topic, count=count)
+                for topic, count in counts.most_common(max(0, self.topics_per_type))
+            )
         return topics[: max(0, self.topics_max)]
 
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from superbiz_agent.harness.compaction import DeterministicHistoryCompactor
-from superbiz_agent.harness.context import AgentRequestContext, RunContext
+from superbiz_agent.harness.context import RunContext
 from superbiz_agent.harness.context_budget import ContextBudget
 from superbiz_agent.harness.events import RolloutEvent
 from superbiz_agent.harness.token_estimator import ApproxTokenEstimator, TokenEstimator
@@ -15,7 +15,7 @@ from superbiz_agent.prompts.registry import PromptRegistry
 
 
 class MemoryContextProvider(Protocol):
-    def build_context(self, tenant_id: str, user_id: str, agent_id: str) -> MemoryContext:
+    async def build_context(self, run_context: RunContext) -> MemoryContext:
         ...
 
 
@@ -91,7 +91,7 @@ class ContextManager:
         self.tool_result_reducer = tool_result_reducer
         self.history_compactor = history_compactor or DeterministicHistoryCompactor()
 
-    def prepare(
+    async def prepare(
         self,
         *,
         run_context: RunContext,
@@ -102,7 +102,7 @@ class ContextManager:
     ) -> PreparedContext:
         system_prompt = self.prompt_registry.load(prompt_version)
         system_message = ModelMessage(role="system", content=system_prompt)
-        memory_context = self._build_memory_context(run_context.request_context)
+        memory_context = await self._build_memory_context(run_context)
         memory_messages = self._memory_messages(memory_context)
         current_message = ModelMessage(role="user", content=current_user_message)
 
@@ -129,7 +129,6 @@ class ContextManager:
         compaction_before = self.estimator.estimate_messages(
             [*candidate_summary, *candidate_history]
         )
-        compaction_after = compaction_before
 
         if self.budget.should_compact(estimated_after_tool):
             compaction_input = [*candidate_summary, *candidate_history]
@@ -144,7 +143,6 @@ class ContextManager:
                 compaction_triggered = True
                 compacted_source_count = len(compaction.source_messages)
                 compaction_before = compaction.estimated_tokens_before
-                compaction_after = compaction.estimated_tokens_after
                 history_trim_payload = self._history_trim_payload(
                     history_events=history_events,
                     summary=compaction.summary_message.content,
@@ -220,14 +218,10 @@ class ContextManager:
             else 0,
         )
 
-    def _build_memory_context(self, request_context: AgentRequestContext) -> MemoryContext | None:
+    async def _build_memory_context(self, run_context: RunContext) -> MemoryContext | None:
         if self.memory_context_provider is None:
             return None
-        return self.memory_context_provider.build_context(
-            request_context.tenant_id or "",
-            request_context.user_id or "",
-            request_context.agent_id or "",
-        )
+        return await self.memory_context_provider.build_context(run_context)
 
     @staticmethod
     def _memory_messages(memory_context: MemoryContext | None) -> list[ModelMessage]:

@@ -41,7 +41,7 @@
 - `10F Batch B` 已完成；`Batch C Milvus Store & Ingestion` 已完成代码、Milvus Lite 和离线主验收，真实 PostgreSQL 并发/迁移门禁待环境恢复。`Batch D Retrieval 与 queryInternalDocs` 及其可靠性修复已完成独立验收：真实 Milvus Lite、RAG B/C/D 联合回归、全量 stub 与基础 eval 均通过。10F 尚未整体完成，下一步先进行 `10F-F0 RAG 专项评测基础与无 rerank hybrid baseline` 的设计，再决定 Batch E rerank 实施与 Batch F 正式评测。
 - `H-R1 Harness 多工具与多轮 ReAct 循环` 已完成实现和主验收；阶段计划及验收记录见 `docs/H-R1-harness-multi-tool-react-loop-plan.md`。
 - 10G.1 阶段计划见 `docs/10G1-memory-prompt-metadata-plan.md`。
-- `10G.2A 长期记忆专项评测` 已完成 framework、Track A conformance、第一次 Track B dev 36 x1、R1-A/R1-C 评测契约修复与 M-R1 prompt/tool 语义优化。`M-P0` 确定性 exact dedupe 与进程内原子写入已完成独立验收；`M-P2` PostgreSQL 持久化方案已通过两轮设计审核，状态为 `design approved / implementation not started`。真实 embedding、PostgreSQL 持久化实现与语义去重仍未完成；正式 48 x3 baseline 尚未完成，`10G.2B` 后台任务与生命周期治理尚未立项。
+- `10G.2A 长期记忆专项评测` 已完成 framework、Track A conformance、第一次 Track B dev 36 x1、R1-A/R1-C 评测契约修复与 M-R1 prompt/tool 语义优化。`M-P0` 确定性 exact dedupe 与进程内原子写入已完成独立验收；`M-P2` PostgreSQL 持久化实现、39-case 真实 PostgreSQL gate 与独立验收均已通过，状态为 `complete`。真实 embedding 与语义去重仍未完成；正式 48 x3 baseline 尚未完成，`10G.2B` 后台任务与生命周期治理尚未立项。
 
 ## 3. 正式实施路线
 
@@ -383,7 +383,7 @@ python3 -m ruff check src tests                        -> 未运行，当前环�
 状态：
 
 ```text
-进行中：10A 已完成，10B.1 已完成，10C 已完成，10D 已完成，10E 已完成，10F Batch B-D 已完成主验收（Batch C PostgreSQL gate pending），10G.1 已完成；下一 RAG 阶段为 10F-F0 评测基础与 baseline，随后才是 Batch E/F；10G.2A framework complete、initial Track B dev 36 x1、R1-A/R1-C、M-R1 与 M-P0 已完成，M-P2 design approved / implementation not started，正式 baseline incomplete
+进行中：10A 已完成，10B.1 已完成，10C 已完成，10D 已完成，10E 已完成，10F Batch B-D 已完成主验收（Batch C PostgreSQL gate pending），10G.1 已完成；下一 RAG 阶段为 10F-F0 评测基础与 baseline，随后才是 Batch E/F；10G.2A framework complete、initial Track B dev 36 x1、R1-A/R1-C、M-R1、M-P0 与 M-P2 已完成，正式 baseline incomplete
 ```
 
 阶段计划：
@@ -565,7 +565,7 @@ python3 -m ruff check src tests                        -> 未运行，当前环�
 长期记忆评测 R1-A、H-R1、M-R1 与 M-P0 已完成；R1-C 与 M-P0 已通过独立验收。长期记忆后续待办为：
 
 ```text
-正式 Track B 48 x 3 baseline、M-P1 真实 Embedding 与生产检索基线、M-P3 语义去重阈值校准，以及 10G.2B 生命周期治理仍待后续推进；M-P2 PostgreSQL 持久化已完成设计审核，下一状态为整批实现与独立验收
+正式 Track B 48 x 3 baseline、M-P1 真实 Embedding 与生产检索基线、M-P3 语义去重阈值校准，以及 10G.2B 生命周期治理仍待后续推进；M-P2 PostgreSQL 持久化已完成真实数据库 gate 与独立验收
 ```
 
 10G.1 阶段已完成实现和主验收，阶段计划为 `docs/10G1-memory-prompt-metadata-plan.md`。
@@ -573,7 +573,7 @@ python3 -m ruff check src tests                        -> 未运行，当前环�
 
 H-R1 已完成有限多工具/多轮循环、run 级预算、协议防护、禁用工具收尾和 run 状态清理，并通过专项 57、全量 stub 182、基础 eval 14/14、Ruff 与 compileall 主验收。该状态不表示正式长期记忆 baseline 已完成。
 
-M-R1 已按 `docs/M-R1-memory-prompt-tool-semantics-plan.md` 完成 prompt v3、Core unchanged 语义、evaluator 1.2.0 和 targeted runner 实现。其历史 artifact 使用 `ops-tools-v2` 身份；Batch D 后 `ops-tools-v2` 仅可读取历史 artifact，新的 Harness run 统一使用 `ops-tools-v3`。R1-B positive 原报告已零模型调用离线重判为 6/6；R1-C 已修复 A01/I04 精确等价候选和 positive 固定来源 SHA 门禁，原始 guardrails 报告零模型调用离线重判为 9/9，preferred behavior 4/4、final-state safety 4/4、safety 4/4、isolation 1/1 均通过且无 violation。M-P0 已完成 canonical exact dedupe、metadata 合并与进程内原子写入；它不包含真实 embedding、语义去重或 PostgreSQL 跨进程原子性。M-P2 已按 `docs/M-P2-postgresql-memory-persistence-plan.md` 完成两轮设计审核，尚未开始实现。正式长期记忆 Track B 48 x 3 baseline、M-P1/M-P2 实现与验收、M-P3 及生命周期治理尚未完成。
+M-R1 已按 `docs/M-R1-memory-prompt-tool-semantics-plan.md` 完成 prompt v3、Core unchanged 语义、evaluator 1.2.0 和 targeted runner 实现。其历史 artifact 使用 `ops-tools-v2` 身份；Batch D 后 `ops-tools-v2` 仅可读取历史 artifact，新的 Harness run 统一使用 `ops-tools-v3`。R1-B positive 原报告已零模型调用离线重判为 6/6；R1-C 已修复 A01/I04 精确等价候选和 positive 固定来源 SHA 门禁，原始 guardrails 报告零模型调用离线重判为 9/9，preferred behavior 4/4、final-state safety 4/4、safety 4/4、isolation 1/1 均通过且无 violation。M-P0 已完成 canonical exact dedupe、metadata 合并与进程内原子写入。M-P2 已按 `docs/M-P2-postgresql-memory-persistence-plan.md` 完成实现，并以 39/39 通过真实 PostgreSQL gate；2026-07-17 独立验收复跑同样为 39/39，状态为 `complete`。正式长期记忆 Track B 48 x 3 baseline、M-P1、M-P3 及生命周期治理尚未完成。
 
 RAG 路线中 `10F Batch C` 已完成代码实现与主验收：Milvus Lite 真实 dense+sparse/Jieba/upsert 门禁通过；真实 PostgreSQL 并发、复合 tenant FK 和 migration 门禁仍待环境恢复。`Batch D Retrieval 与 queryInternalDocs` 及其 remediation 已通过独立验收：RAG B/C/D 联合专项 198、全量 stub 374、基础 eval 14/14、真实 Milvus Lite、Batch D 范围 Ruff、compileall 与 pip check 均通过。下一阶段不是直接接 rerank，而是 `10F-F0` 先建立 RAG 专项评测与无 rerank hybrid baseline；Batch E rerank 与 Batch F 正式评测仍未完成，10F 不得标记 complete。
 

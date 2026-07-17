@@ -167,7 +167,7 @@ class MemoryToolHandlers:
     ) -> dict[str, Any]:
         run_context = invocation_context.run_context
         context = run_context.request_context
-        topics = self.search_service.list_memory_topics(
+        topics = await self.search_service.list_memory_topics(
             context.tenant_id or "",
             context.user_id or "",
             context.agent_id or "",
@@ -191,7 +191,7 @@ class MemoryToolHandlers:
         run_context = invocation_context.run_context
         context = run_context.request_context
         tag_list = parse_tags(args.tags)
-        results = self.search_service.search_memory(
+        results = await self.search_service.search_memory(
             context.tenant_id or "",
             context.user_id or "",
             context.agent_id or "",
@@ -239,7 +239,7 @@ class MemoryToolHandlers:
         invocation_context: ToolInvocationContext,
     ) -> dict[str, Any]:
         run_context = invocation_context.run_context
-        result = self.core_service.update_block_with_policy(
+        result = await self.core_service.update_block_with_policy(
             run_context,
             args.block_key,
             args.new_content,
@@ -304,7 +304,7 @@ class MemoryToolHandlers:
     ) -> dict[str, Any]:
         run_context = invocation_context.run_context
         tag_list = parse_tags(args.tags)
-        result = self.archival_service.save_archival_memory(
+        result = await self.archival_service.save_archival_memory(
             run_context,
             topic=args.topic,
             content=args.content,

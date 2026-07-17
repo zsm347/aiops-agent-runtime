@@ -21,6 +21,19 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import UserDefinedType
 
+from superbiz_agent.memory.persistence_contract import (
+    ACTIVE_CONTENT_HASH_CHECK,
+    ACTIVE_EXACT_INDEX,
+    ACTIVE_EXACT_PREDICATE_SQL,
+    CORE_BLOCK_KEY_CHECK,
+    CORE_CONTENT_HASH_FORMAT_CHECK,
+    CORE_MAX_TOKENS_POSITIVE_CHECK,
+    CORE_VERSION_POSITIVE_CHECK,
+    SCOPE_ENV_NONBLANK_CHECK,
+    SCOPE_SERVICE_NONBLANK_CHECK,
+    TAGS_ARRAY_CHECK,
+)
+
 
 class PgVector(UserDefinedType):
     cache_ok = True
@@ -85,6 +98,32 @@ class LongTermMemory(Base):
         CheckConstraint("usage_count >= 0", name="chk_long_term_memory_usage_count"),
         CheckConstraint("status IN ('active', 'archived')", name="chk_long_term_memory_status"),
         CheckConstraint("embedding_dimension > 0", name="chk_long_term_memory_embedding_dimension"),
+        CheckConstraint(
+            "status <> 'active' OR "
+            "(content_hash IS NOT NULL AND content_hash ~ '^[0-9a-f]{64}$')",
+            name=ACTIVE_CONTENT_HASH_CHECK,
+        ),
+        CheckConstraint(
+            "scope_service IS NULL OR btrim(scope_service) <> ''",
+            name=SCOPE_SERVICE_NONBLANK_CHECK,
+        ),
+        CheckConstraint(
+            "scope_env IS NULL OR btrim(scope_env) <> ''",
+            name=SCOPE_ENV_NONBLANK_CHECK,
+        ),
+        CheckConstraint("jsonb_typeof(tags) = 'array'", name=TAGS_ARRAY_CHECK),
+        Index(
+            ACTIVE_EXACT_INDEX,
+            "tenant_id",
+            "user_id",
+            "agent_id",
+            "type",
+            text("COALESCE(scope_service, '')"),
+            text("COALESCE(scope_env, '')"),
+            "content_hash",
+            unique=True,
+            postgresql_where=text(ACTIVE_EXACT_PREDICATE_SQL),
+        ),
         Index("idx_memory_tenant_user_status", "tenant_id", "user_id", "agent_id", "status"),
         Index("idx_memory_tenant_user_type_topic", "tenant_id", "user_id", "agent_id", "type", "topic", "status"),
         Index("idx_memory_tenant_scope", "tenant_id", "user_id", "agent_id", "status", "scope_service", "scope_env"),
@@ -145,6 +184,17 @@ class AgentCoreMemoryBlock(Base):
             name="uq_core_memory_block",
         ),
         CheckConstraint("status IN ('active', 'archived')", name="chk_core_memory_status"),
+        CheckConstraint(
+            "block_key IN ('user_rules', 'user_ops_profile', 'service_notes')",
+            name=CORE_BLOCK_KEY_CHECK,
+        ),
+        CheckConstraint("version >= 1", name=CORE_VERSION_POSITIVE_CHECK),
+        CheckConstraint("max_tokens > 0", name=CORE_MAX_TOKENS_POSITIVE_CHECK),
+        CheckConstraint(
+            "content_hash IS NOT NULL AND "
+            "(content_hash = '' OR content_hash ~ '^[0-9a-f]{64}$')",
+            name=CORE_CONTENT_HASH_FORMAT_CHECK,
+        ),
         Index(
             "idx_core_memory_tenant_user_agent",
             "tenant_id",
@@ -165,7 +215,7 @@ class AgentCoreMemoryBlock(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     read_only: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("FALSE"))
     source: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'memory_service'"))
-    content_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    content_hash: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

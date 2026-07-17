@@ -3,14 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from superbiz_agent.harness.context import AgentRequestContext
+from superbiz_agent.harness.context import RunContext
+from superbiz_agent.memory.errors import MemoryStoreIsolationError
 from superbiz_agent.memory.schemas import MemoryContext
 from superbiz_agent.model_gateway.base import ModelMessage
 from superbiz_agent.prompts.registry import PromptRegistry
 
 
 class MemoryContextProvider(Protocol):
-    def build_context(self, tenant_id: str, user_id: str, agent_id: str) -> MemoryContext:
+    async def build_context(self, run_context: RunContext) -> MemoryContext:
         ...
 
 
@@ -67,13 +68,13 @@ class ContextAssembler:
         self.prompt_registry = prompt_registry
         self.memory_context_provider = memory_context_provider
 
-    def assemble(
+    async def assemble(
         self,
         *,
         prompt_version: str | None = None,
         active_history: list[ModelMessage] | None = None,
         current_user_message: str | None = None,
-        request_context: AgentRequestContext | None = None,
+        run_context: RunContext | None = None,
         prepared_context: object | None = None,
     ) -> AssembledContext:
         if prepared_context is not None:
@@ -84,12 +85,10 @@ class ContextAssembler:
         system_prompt = self.prompt_registry.load(prompt_version)
         messages = [ModelMessage(role="system", content=system_prompt)]
         memory_context = None
-        if self.memory_context_provider is not None and request_context is not None:
-            memory_context = self.memory_context_provider.build_context(
-                request_context.tenant_id or "",
-                request_context.user_id or "",
-                request_context.agent_id or "",
-            )
+        if self.memory_context_provider is not None and run_context is None:
+            raise MemoryStoreIsolationError()
+        if self.memory_context_provider is not None:
+            memory_context = await self.memory_context_provider.build_context(run_context)
             if memory_context.core_memory_xml.strip():
                 messages.append(
                     ModelMessage(role="system", content=memory_context.core_memory_xml)

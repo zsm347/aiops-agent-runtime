@@ -1,8 +1,8 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "split": "dev",
   "dataset_file": "memory_retrieval_v1.json",
-  "dataset_sha256": "ba3e3854f68cb0cc0e12ab287026c45a4f70008a6bf3540b40a5d4b3dc321a88",
+  "dataset_sha256": "007b2c17505784f53ab8937f19d243949a7899a7d6da256de62639d147ac3cbe",
   "fixture_evidence": {
     "mpr1-fixture-orders-pool": "mpr1-evidence-orders-pool",
     "mpr1-fixture-orders-cache": "mpr1-evidence-orders-cache",

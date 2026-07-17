@@ -4,7 +4,7 @@
 
 ```text
 阶段：M-P1
-状态：real embedding and PostgreSQL baseline executed / pending independent acceptance
+状态：implementation complete / pending independent acceptance
 前置：M-P0 exact dedupe complete、M-P2 PostgreSQL persistence complete
 目标：用真实 1024 维 embedding 和 PostgreSQL pgvector 建立可复现的生产检索基线
 后续：M-P3 semantic dedupe、10G.2B 生命周期治理
@@ -257,15 +257,19 @@ real embedding and PostgreSQL baseline executed / pending independent acceptance
 
 不得直接标记 M-P1 complete。
 
-## 14. 2026-07-17 实施与验收证据
+## 14. 2026-07-17 原始实施与验收证据（已由 M-P1-R1 取代）
+
+> 本节保留原始执行历史。原 report 缺少逐 case observation，identity canary 被计入 ranking
+> denominator，且 `0.4` 选点未通过 hard-negative quality gate，因此不得再作为可复核的
+> production candidate 证据。当前结论以第 15 节为准。
 
 当前分支已完成实现和执行门禁，状态为：
 
 ```text
-real embedding and PostgreSQL baseline executed / pending independent acceptance
+historical baseline executed / superseded by M-P1-R1
 ```
 
-这不是 M-P1 complete；Draft PR 仍需技术负责人独立审查与复跑。本批次没有进入 M-P3。
+这不是 M-P1 complete；该历史结果已被 M-P1-R1 撤回为非 candidate 证据。
 
 ### 14.1 实现结果
 
@@ -305,15 +309,13 @@ downgrade case 按设计把一次性数据库留在 base，M-P1 fixture 在 Alem
 
 ### 14.3 真实 embedding + PostgreSQL dev baseline
 
-现有安全配置没有独立 `MEMORY_EMBEDDING_*` credential。仅在一次验收进程内，把 Settings
-加载的现有 compatible credential 显式映射到独立 Memory 配置字段；产品 builder 没有新增
-fallback。调用仅限 DashScope-compatible Embeddings API，模型/版本 `text-embedding-v4`、
-dimension `1024`，未调用聊天、rerank 或其他模型。
+原始执行没有独立 `MEMORY_EMBEDDING_*` credential，而是在验收包装进程内映射了 Chat
+compatible credential。M-P1-R1 已禁止这种做法；该运行不能充当整改后的真实 baseline。
 
 ```text
 planned=12 executed=12 skipped=0 infrastructure_failures=0
 production_retrieval_ranking=evaluated
-selected topK=3 min_similarity=0.4
+historical selected topK=3 min_similarity=0.4 (withdrawn)
 ```
 
 选定 dev 点的结果：
@@ -342,8 +344,7 @@ selected topK=3 min_similarity=0.4
 | 0.6 | 0.80 | 0.80 | 0.80 | 0.00 | 0 |
 | 0.7 | 0.60 | 0.60 | 0.60 | 0.00 | 0 |
 
-选择规则只使用 dev：先最小化 no-match FPR，再最大化 MRR/Recall，然后减少 forbidden hit。
-没有使用 Holdout，也没有预设旧 `0.5` 正确。
+该历史选择规则没有把 hard-negative forbidden hit 作为硬门禁，因此 `0.4` 结论已撤回。
 
 质量错误分析保持原 gold 不变：
 
@@ -383,3 +384,95 @@ eadf90360e0268fe60f0b6259cbd5285a9d00ca6900e3637b198afbc1d5ca817  canonical Open
 before 与 after 完全一致。新增 retrieval Dataset SHA-256 为
 `ba3e3854f68cb0cc0e12ab287026c45a4f70008a6bf3540b40a5d4b3dc321a88`，并由独立 manifest
 固定。
+
+## 15. M-P1-R1 评测整改
+
+### 15.1 当前状态
+
+```text
+implementation complete / pending independent acceptance
+```
+
+PR #3 继续保持 Draft。没有修改生产 prompt、主 Memory Dataset/Judge、Graph、RAG、tool
+schema 或生产默认 threshold；没有进入 M-P3。
+
+### 15.2 Dataset 语义修正
+
+Dataset 从 `1.0.0` 更新到 `1.0.1`。唯一语义变更是 MPR10-MPR12：
+
+- 查询身份仍为 primary，跨 tenant/user/agent canary 仍分别保留在 forbidden IDs。
+- primary scope 下没有真正相关 gold，因此 `relevant_evidence_ids` 改为空。
+- `expected_empty=true`，任何非空结果都会使 isolation case 失败。
+- MPR01-MPR09、全部 fixture/query/content 和三条跨身份 forbidden canary 均未修改。
+
+```text
+before: ba3e3854f68cb0cc0e12ab287026c45a4f70008a6bf3540b40a5d4b3dc321a88
+after:  007b2c17505784f53ab8937f19d243949a7899a7d6da256de62639d147ac3cbe
+```
+
+### 15.3 三条独立评测轨道
+
+- Semantic ranking：MPR01-MPR07；只有这 7 个 case 进入 HitRate@3、Recall@3、MRR 分母。
+- No-match：MPR08-MPR09；单独计算 false-positive case 数和 FPR。
+- Identity isolation：MPR10-MPR12；单独计算 case pass/fail、identity violation、forbidden
+  evidence violation 和 unexpected non-empty result。
+
+每个 report observation 现在固定包含 case/category/track、query SHA-256、实际 topK/threshold、
+有序 evidence ID/score/rank、query latency、relevant/forbidden IDs 与 matches、unexpected IDs、
+identity violation 和 case pass/fail；不记录 query 原文、正文、DSN、host 或 credential。
+
+### 15.4 Scan、quality gate 与 candidate
+
+一次 superset scan 使用 `topK=max(scan topK)`、`min_similarity=-1`。它的延迟字段明确命名为
+`superset_scan_p50/p95_latency_ms`，只用于描述 scan，不再冒充 candidate latency。
+
+production candidate quality gate 必须同时满足：
+
+1. 全部 case 执行且 infrastructure failure 为 0。
+2. no-match FPR 为 0。
+3. semantic hard-negative forbidden violation 为 0。
+4. identity isolation violation 为 0。
+5. isolation forbidden evidence violation 为 0。
+6. 三个 isolation case 全部通过。
+
+只有 gate 通过的 `topK=3` 点才参与 MRR/Recall/HitRate 排序。没有通过点时 selected config 为
+`null`、candidate status 为 `no_candidate`。候选产生后，runner 会以该候选的真实 topK 和
+threshold 再执行全部 query，单独记录 actual candidate p50/p95，并再次检查同一 quality gate。
+report 同时记录 Pareto frontier 和质量残差。
+
+这只是 12-case dev pilot，不是 Holdout、规模压测、ANN 结论或正式 production calibration。
+即使产生 dev pilot candidate，也不修改生产默认 `memory_search_min_similarity=0.5`。
+
+### 15.5 可复核 artifact
+
+report 使用稳定、排序、紧凑 JSON 序列化。每个成功真实 baseline 同时生成
+`<report>.manifest.json`，固定 report filename、report SHA-256 和 Dataset SHA-256。对应脱敏
+report/manifest 必须纳入 PR 证据。测试覆盖 report schema、逐 case observation、稳定序列化、
+Dataset drift 和 report manifest hash。
+
+本轮运行时 Settings 未配置独立 `MEMORY_EMBEDDING_*` provider/dimension/key/base URL。权威
+runner 在任何 API 调用前返回：
+
+```text
+status=pending reason=MEMORY_EMBEDDING_configuration_missing exit_code=3
+```
+
+因此本轮没有真实 embedding API 调用，没有生成整改后的 report/manifest，report SHA 为
+`not_generated (pending)`，production candidate 结论为 `pending`。禁止使用 stub 或从
+Chat/RAG credential 映射来填补该证据。
+
+### 15.6 验收结果
+
+新建空 PostgreSQL 16.14 + pgvector 0.8.5 一次性数据库，执行后已删除数据库和角色并停止
+服务：
+
+```text
+M-P1 retrieval unit/embedding/backfill: 42 passed
+M-P1 PostgreSQL gate:                  7 passed, 0 skipped
+M-P2 PostgreSQL regression:           39 passed, 0 skipped
+MODEL_PROVIDER=stub full suite:        564 passed, 46 skipped
+```
+
+全量 46 skips 是未注入专用 URL 时的 39 个 M-P2 和 7 个 M-P1 PostgreSQL cases；两个真实 PG
+门禁已如上独立完整执行。Ruff、compileall、pip check、`git diff --check` 与冻结资产 hash 在
+最终提交前复核。

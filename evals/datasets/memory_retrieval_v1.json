@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "split": "dev",
   "fixtures": [
     {
@@ -169,24 +169,27 @@
       "category": "identity_isolation",
       "identity": "primary",
       "query": "private tenant orders database pool proxy topology",
-      "relevant_evidence_ids": ["mpr1-evidence-orders-pool"],
-      "forbidden_evidence_ids": ["mpr1-evidence-other-tenant"]
+      "relevant_evidence_ids": [],
+      "forbidden_evidence_ids": ["mpr1-evidence-other-tenant"],
+      "expected_empty": true
     },
     {
       "case_id": "MPR11",
       "category": "identity_isolation",
       "identity": "primary",
       "query": "private user payment gateway workaround",
-      "relevant_evidence_ids": ["mpr1-evidence-payments-timeout"],
-      "forbidden_evidence_ids": ["mpr1-evidence-other-user"]
+      "relevant_evidence_ids": [],
+      "forbidden_evidence_ids": ["mpr1-evidence-other-user"],
+      "expected_empty": true
     },
     {
       "case_id": "MPR12",
       "category": "identity_isolation",
       "identity": "primary",
       "query": "private authentication rotation note",
-      "relevant_evidence_ids": ["mpr1-evidence-auth-rotation"],
-      "forbidden_evidence_ids": ["mpr1-evidence-other-agent"]
+      "relevant_evidence_ids": [],
+      "forbidden_evidence_ids": ["mpr1-evidence-other-agent"],
+      "expected_empty": true
     }
   ]
 }

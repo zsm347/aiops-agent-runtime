@@ -36,24 +36,31 @@
 
 ### M-P1 真实 Embedding 与 pgvector 检索
 
-状态：`real embedding and PostgreSQL baseline executed / pending independent acceptance`
+状态：`implementation complete / pending independent acceptance`
 
 - 分支：`feat/m-p1-real-embedding-retrieval`。
 - PostgreSQL `16.14`、server pgvector `0.8.5`、Python pgvector `0.5.0`。
 - M-P1 真实 PostgreSQL gate：`7/7 passed, 0 skipped`；M-P2 回归 gate：`39/39 passed,
   0 skipped`。
-- DashScope-compatible `text-embedding-v4`、1024 维真实 API + PostgreSQL dev baseline：
-  `12/12 executed`、0 infrastructure failure，production retrieval ranking 为 `evaluated`。
-- dev 选择点 `topK=3/min_similarity=0.4`：HitRate@3 `1.0`、Recall@3 `0.95`、MRR
-  `1.0`、no-match FPR `0.0`、identity violation `0`、p50 `185.93 ms`、p95
-  `287.42 ms`。
-- 已知质量残差：MPR03 hard-negative forbidden hit 1 次；MPR05 两个 gold 只召回一个。
-  没有为提高数字修改 Dataset/gold。
-- 回归：M-P1/M-P2 unit `148 passed`、长期记忆 `24 passed`、Memory eval `86 passed`、
-  RAG B/C/D `198 passed`、全量 stub `559 passed / 46 skipped`、基础 eval `14/14`；
-  Ruff、compileall、pip check、diff check 通过。
+- M-P1-R1 已撤回原 `topK=3/min_similarity=0.4` candidate：原 report 不含逐 case evidence，
+  isolation canary 被计入 ranking denominator，hard-negative forbidden hit 未作为硬门禁，且
+  latency 是 superset scan 口径。
+- Dataset `1.0.1` 将 MPR10-MPR12 修正为空结果 isolation contract，保留 tenant/user/agent
+  forbidden canary；SHA 从 `ba3e...21a88` 更新为 `007b...c3cbe`。
+- 新 evaluator 分离 semantic MPR01-07、no-match MPR08-09、isolation MPR10-12；report 新增
+  逐 case 脱敏 observations、scan config、硬 quality gate、Pareto frontier、候选实配复跑延迟
+  和 report SHA manifest。
+- production candidate 必须满足 no-match FPR=0、hard-negative forbidden=0、identity 与
+  isolation forbidden=0、三个 isolation case 全过；否则 `no_candidate`。生产默认 threshold
+  `0.5` 未修改。
+- 当前 Settings 没有独立 `MEMORY_EMBEDDING_*` 配置，真实 baseline 返回 pending/exit 3；没有
+  从 Chat/RAG credential 回退，没有 API 调用，没有生成新 report，report SHA 为
+  `not_generated (pending)`，candidate 结论为 `pending`。
+- 本轮回归：retrieval/embedding/backfill `42 passed`、M-P1 PG `7/7`、M-P2 PG `39/39`、
+  全量 stub `564 passed / 46 skipped`；最终静态与冻结 hash 门禁见 M-P1 plan 第 15 节。
 - 冻结 prompt、Memory Dataset v1、Judge、Graph、OpenAI tool schema SHA-256 均未变化。
-- 下一步仅为技术负责人独立验收；不要转 Ready、不要合并、不要进入 M-P3。
+- 下一步是注入独立 Memory embedding 配置后只运行一次轻量真实 baseline，并提交脱敏
+  report/manifest，再由技术负责人独立验收；不要转 Ready、不要合并、不要进入 M-P3。
 
 详见 `docs/M-P1-real-embedding-retrieval-plan.md`。
 

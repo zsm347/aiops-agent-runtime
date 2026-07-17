@@ -240,6 +240,14 @@ def build_memory_embedding_service(
             settings.memory_embedding_dimension,
             version=version,
         )
+    if client is None and not _nonblank(settings.memory_embedding_api_key):
+        raise MemoryEmbeddingConfigurationError()
+    if (
+        client is None
+        and provider == "dashscope-openai-compatible"
+        and not _nonblank(settings.memory_embedding_base_url)
+    ):
+        raise MemoryEmbeddingConfigurationError()
     return OpenAICompatibleMemoryEmbeddingService(
         provider=provider,
         model=settings.memory_embedding_model,

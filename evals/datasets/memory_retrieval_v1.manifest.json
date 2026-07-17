@@ -1,0 +1,16 @@
+{
+  "version": "1.0.0",
+  "split": "dev",
+  "dataset_file": "memory_retrieval_v1.json",
+  "dataset_sha256": "ba3e3854f68cb0cc0e12ab287026c45a4f70008a6bf3540b40a5d4b3dc321a88",
+  "fixture_evidence": {
+    "mpr1-fixture-orders-pool": "mpr1-evidence-orders-pool",
+    "mpr1-fixture-orders-cache": "mpr1-evidence-orders-cache",
+    "mpr1-fixture-payments-timeout": "mpr1-evidence-payments-timeout",
+    "mpr1-fixture-worker-disk": "mpr1-evidence-worker-disk",
+    "mpr1-fixture-auth-rotation": "mpr1-evidence-auth-rotation",
+    "mpr1-fixture-other-tenant": "mpr1-evidence-other-tenant",
+    "mpr1-fixture-other-user": "mpr1-evidence-other-user",
+    "mpr1-fixture-other-agent": "mpr1-evidence-other-agent"
+  }
+}

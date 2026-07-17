@@ -263,3 +263,23 @@ def test_builder_uses_real_settings_without_model_or_rag_fallback() -> None:
 
     assert service.identity.provider == "openai-compatible"
     assert service.identity.version == "memory-v1"
+
+
+def test_builder_requires_independent_key_and_dashscope_base_url() -> None:
+    missing_key = Settings(
+        _env_file=None,
+        memory_embedding_provider="dashscope-openai-compatible",
+        memory_embedding_model="text-embedding-v4",
+        memory_embedding_version="text-embedding-v4",
+        memory_embedding_dimension=1024,
+        memory_embedding_base_url="https://example.invalid/compatible-mode/v1",
+        memory_embedding_api_key=None,
+    )
+    with pytest.raises(MemoryEmbeddingConfigurationError):
+        build_memory_embedding_service(missing_key)
+
+    missing_base_url = missing_key.model_copy(
+        update={"memory_embedding_api_key": "memory-secret", "memory_embedding_base_url": None}
+    )
+    with pytest.raises(MemoryEmbeddingConfigurationError):
+        build_memory_embedding_service(missing_base_url)

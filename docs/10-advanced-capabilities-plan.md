@@ -530,7 +530,7 @@ docs/10G2-long-term-memory-eval-plan.md
 内部 MemoryIndexService、memory_index_xml、hasMemoryIndex、memoryIndexTopicCount 等兼容命名暂时保留，并新增 hasMemoryMetadata。
 已精细化 user_rules、user_ops_profile、service_notes 三个 Core Memory block description。
 已优化 listMemoryTopics、searchMemory、updateCoreMemory、saveArchivalMemory 的工具描述，并更新 ops-agent-system-v2.md 长期记忆规则。
-10G.2A 已完成 Dataset、Snapshot、eval-only capture、Trace/State/Retrieval/Use Judges、Track A conformance、Runner/report/checkpoint、第一次 Track B dev 36 x1 和 R1-A。R1-A 离线重判后 blocking 23/35、diagnostic 0/1；safety/isolation 在已执行路径中均未观察到 violation，mechanical retrieval 4/12，production ranking 仍为 `not_evaluated`。Harness 单工具执行、生产 memory prompt、真实 Embedding 和 PostgreSQL 持久化属于待独立立项问题；正式 48 x3 baseline 尚未完成。
+10G.2A 已完成 Dataset、Snapshot、eval-only capture、Trace/State/Retrieval/Use Judges、Track A conformance、Runner/report/checkpoint、第一次 Track B dev 36 x1 和 R1-A。R1-A 历史离线重判后 blocking 23/35、diagnostic 0/1；safety/isolation 在当时已执行路径中均未观察到 violation，mechanical retrieval 4/12，production ranking 当时为 `not_evaluated`。此后 H-R1、M-R1 与 M-P2 已完成，M-P1 已用独立 dev Dataset 执行真实 Embedding + PostgreSQL baseline 并等待独立验收；正式 48 x3 baseline 尚未完成。
 10G.2B 尚未实现后台 LLM extraction、memory_candidate、Recall Memory、遗忘/archive job，也未新增 Archival Memory update/delete/archive 工具。
 ```
 
@@ -641,7 +641,7 @@ docs/10G2-long-term-memory-eval-plan.md
 docs/10G2A-memory-eval-baseline-remediation-plan.md
 ```
 
-R1-A、H-R1 与 M-R1 已完成。M-R1 R1-B positive 已用原报告零模型调用离线重判为 6/6；R1-C 已完成 A01/I04 精确等价候选和 positive 固定来源 SHA 门禁实现，原始 guardrails 报告经新 Dataset 零模型调用离线重判为 9/9，preferred behavior、安全和隔离门禁全部通过且无 violation。R1-C 已于 2026-07-12 通过独立验收，M-R1 状态为 `complete`。真实 Embedding 和 PostgreSQL 持久化继续按独立生产路径立项；本轮未运行 dev 36 x3 或 holdout 12 x3，正式长期记忆 baseline 尚未完成，10G.2B 仍未立项。
+R1-A、H-R1 与 M-R1 已完成。M-R1 R1-B positive 已用原报告零模型调用离线重判为 6/6；R1-C 已完成 A01/I04 精确等价候选和 positive 固定来源 SHA 门禁实现，原始 guardrails 报告经新 Dataset 零模型调用离线重判为 9/9，preferred behavior、安全和隔离门禁全部通过且无 violation。R1-C 已于 2026-07-12 通过独立验收，M-R1 状态为 `complete`。M-P2 PostgreSQL 持久化已完成独立验收；M-P1 真实 Embedding + pgvector dev baseline 已执行并等待独立验收。本轮未运行 dev 36 x3 或 holdout 12 x3，正式长期记忆 baseline 尚未完成，10G.2B 仍未立项。
 
 ## 15. 验收命令
 

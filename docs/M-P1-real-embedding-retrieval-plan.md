@@ -4,7 +4,7 @@
 
 ```text
 阶段：M-P1
-状态：implementation in progress
+状态：real embedding and PostgreSQL baseline executed / pending independent acceptance
 前置：M-P0 exact dedupe complete、M-P2 PostgreSQL persistence complete
 目标：用真实 1024 维 embedding 和 PostgreSQL pgvector 建立可复现的生产检索基线
 后续：M-P3 semantic dedupe、10G.2B 生命周期治理
@@ -256,3 +256,130 @@ real embedding and PostgreSQL baseline executed / pending independent acceptance
 ```
 
 不得直接标记 M-P1 complete。
+
+## 14. 2026-07-17 实施与验收证据
+
+当前分支已完成实现和执行门禁，状态为：
+
+```text
+real embedding and PostgreSQL baseline executed / pending independent acceptance
+```
+
+这不是 M-P1 complete；Draft PR 仍需技术负责人独立审查与复跑。本批次没有进入 M-P3。
+
+### 14.1 实现结果
+
+- 新增异步 `MemoryEmbeddingService`，生产服务不再绑定 deterministic 具体类型。
+- 新增独立 Memory provider/model/version/dimension/batch/base URL/API key/timeout 配置；真实
+  provider 未配置独立 key 时 fail closed，产品代码不回退 model 或 RAG credential。
+- 固定 `pgvector==0.5.0`，SQLAlchemy 模型和查询使用官方 `VECTOR(1024)` 与
+  `cosine_distance()`。
+- PostgreSQL query 在 SQL 内强制 tenant/user/agent、active、type、scope、tag、embedding
+  identity、threshold、order 与 limit；返回后由 repository 和 service 两层复核。
+- local-deterministic 仅保留 unit/fixture/Track A 路径；PostgreSQL 过渡写入继续保存 `NULL`
+  vector，不 padding、不截断。
+- backfill 支持 dry-run、批次、ID keyset、重复执行、失败恢复与 content/hash/updated_at CAS；
+  报告只含计数和稳定错误码。
+- exact dedupe 仍只由 M-P0 canonical hash 和 frozen exact key 决定，embedding 不参与写入
+  去重。
+- 新增独立 dev Dataset/manifest 和稳定 fixture/evidence ID；未修改 Memory Dataset v1、Judge
+  或 Holdout。
+
+### 14.2 真实 PostgreSQL 门禁
+
+环境：PostgreSQL `16.14 (Homebrew)`、server pgvector `0.8.5`、Python pgvector `0.5.0`。
+所有 URL 与凭证只注入进程，未写入文档、报告或环境文件。
+
+```text
+python scripts/run_memory_retrieval_postgres_acceptance.py
+planned=7 executed=7 skipped=0 passed=7 failed=0 status=passed
+
+python scripts/run_memory_postgres_acceptance.py
+planned=39 executed=39 skipped=0 passed=39 failed=0 status=passed
+```
+
+首次 M-P1 PG 全量运行在 setup 阶段失败，7 个 case 均未执行。根因是 M-P2 权威门禁的最终
+downgrade case 按设计把一次性数据库留在 base，M-P1 fixture 在 Alembic upgrade 前尝试清理
+不存在的表。修复为 M-P1 权威脚本在 URL、数据库名、数据库 comment 和显式确认四重保护后
+先执行 `upgrade head`。最小 vector write/restart case 随后 `1 passed`，完整复跑 `7 passed`。
+
+### 14.3 真实 embedding + PostgreSQL dev baseline
+
+现有安全配置没有独立 `MEMORY_EMBEDDING_*` credential。仅在一次验收进程内，把 Settings
+加载的现有 compatible credential 显式映射到独立 Memory 配置字段；产品 builder 没有新增
+fallback。调用仅限 DashScope-compatible Embeddings API，模型/版本 `text-embedding-v4`、
+dimension `1024`，未调用聊天、rerank 或其他模型。
+
+```text
+planned=12 executed=12 skipped=0 infrastructure_failures=0
+production_retrieval_ranking=evaluated
+selected topK=3 min_similarity=0.4
+```
+
+选定 dev 点的结果：
+
+| metric | value |
+|---|---:|
+| HitRate@3 | 1.000 |
+| Recall@3 | 0.950 |
+| MRR | 1.000 |
+| no-match false-positive rate | 0.000 |
+| identity isolation violations | 0 |
+| forbidden result violations | 1 |
+| mean results/query | 1.667 |
+| p50 latency | 185.93 ms |
+| p95 latency | 287.42 ms |
+| infrastructure failures | 0 |
+
+`topK=3` threshold 曲线：
+
+| min similarity | HitRate@3 | Recall@3 | MRR | no-match FPR | forbidden |
+|---:|---:|---:|---:|---:|---:|
+| 0.0 | 1.00 | 1.00 | 1.00 | 1.00 | 1 |
+| 0.2 | 1.00 | 1.00 | 1.00 | 1.00 | 1 |
+| 0.4 | 1.00 | 0.95 | 1.00 | 0.00 | 1 |
+| 0.5 | 0.90 | 0.90 | 0.90 | 0.00 | 1 |
+| 0.6 | 0.80 | 0.80 | 0.80 | 0.00 | 0 |
+| 0.7 | 0.60 | 0.60 | 0.60 | 0.00 | 0 |
+
+选择规则只使用 dev：先最小化 no-match FPR，再最大化 MRR/Recall，然后减少 forbidden hit。
+没有使用 Holdout，也没有预设旧 `0.5` 正确。
+
+质量错误分析保持原 gold 不变：
+
+- `MPR03` hard negative 在选定点仍返回 1 个 forbidden evidence。
+- `MPR05` scope filter 的两个 relevant evidence 只召回一个，因此总体 Recall@3 为 `0.95`。
+- 小型 dev fixture 的延迟不是生产规模容量结论；尚未引入 ANN index、rerank 或 M-P3 semantic
+  dedupe。
+
+### 14.4 回归
+
+```text
+M-P1/M-P2 persistence/runtime/embedding/retrieval unit: 148 passed
+long-term memory:                                      24 passed
+Memory eval dataset/judges/runner/snapshots:           86 passed
+RAG B/C/D with constraints/rag-integration.txt:       198 passed
+MODEL_PROVIDER=stub full suite:                       559 passed, 46 skipped
+basic eval runner:                                     14/14 passed
+Ruff changed Python files:                             passed
+compileall -q src tests scripts:                       passed
+pip check:                                             passed
+git diff --check main...HEAD:                         passed
+```
+
+全量 stub 的 46 skips 是未注入专用 URL 时明确 pending 的 39 个 M-P2 PG case 与 7 个 M-P1 PG
+case；真实门禁统计以上方独立权威入口为准。
+
+### 14.5 冻结资产 SHA-256 before/after
+
+```text
+84cef93089ae4932350842786ead4cf8c92df2964e05213aeae49db9fe568b49  prompts/ops-agent-system-v3.md
+df34b4b851f89c827e2bfdf67ffcfc167a5dd3b2f349d2423b2df3926953ff0f  evals/datasets/long_term_memory_v1.json
+029f18c70971146164255a93594b6d9007072a6385a36953a061b05caba302ea  src/superbiz_agent/evals/memory_judges.py
+4593330fbc29c9186e6192ca1f0728dfde519c83542cd65e62a67096b0124b70  src/superbiz_agent/harness/graph.py
+eadf90360e0268fe60f0b6259cbd5285a9d00ca6900e3637b198afbc1d5ca817  canonical OpenAI tool schema JSON
+```
+
+before 与 after 完全一致。新增 retrieval Dataset SHA-256 为
+`ba3e3854f68cb0cc0e12ab287026c45a4f70008a6bf3540b40a5d4b3dc321a88`，并由独立 manifest
+固定。

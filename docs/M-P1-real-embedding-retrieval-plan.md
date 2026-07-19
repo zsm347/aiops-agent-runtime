@@ -529,3 +529,34 @@ M-P1-R1 独立审查发现 candidate rerun infrastructure failure 曾被归类�
 `no_candidate`。已新增 unit case 覆盖“scan 成功、candidate `_execute_cases` 返回
 `memory_store_unavailable`”：report 为 `infrastructure_failed`、candidate 为
 `candidate_not_evaluated`、selected 为 null、CLI 非零。整改后 retrieval 专项为 `43 passed`。
+
+### 16. M-P1-R2 高质量检索 Dataset 与离线校准
+
+R2 使用独立 `evals/datasets/memory_retrieval_v2.json`，不改写 v1 或长期记忆主 Dataset。
+Dataset 固定包含 60 条 curated synthetic AIOps fixture、48 条 dev query（30 semantic、10
+no-match、8 identity isolation）和 12 条 holdout。Holdout 只冻结在 manifest 中，禁止传入真实
+runner 或阈值校准。
+
+`memory_retrieval_v2.py` 分离 Dataset contract、质量报告、脱敏逐 case observation、top1
+similarity 与 top1/top2 margin 的 observed-breakpoint 离线校准。校准输入仅是分数和 margin，
+不得使用 case id、category 或 gold 作为生产 gating 输入；本阶段只输出 Pareto/feasibility，
+不自动选择 candidate，也不修改 `memory_search_min_similarity=0.5`。
+
+R2 真实运行命令为：
+
+```text
+M_P1_R2_TEST_DATABASE_URL=<isolated asyncpg URL> \
+M_P1_R2_TEST_DATABASE_DESTRUCTIVE_CONFIRM=ERASE_M_P1_R2_ISOLATED_TEST_DATABASE \
+MEMORY_EMBEDDING_PROVIDER=dashscope-openai-compatible \
+MEMORY_EMBEDDING_MODEL=text-embedding-v4 \
+MEMORY_EMBEDDING_VERSION=text-embedding-v4 \
+MEMORY_EMBEDDING_DIMENSION=1024 \
+MEMORY_EMBEDDING_API_KEY=<process-local secret> \
+MEMORY_EMBEDDING_BASE_URL=<process-local endpoint> \
+python scripts/run_memory_retrieval_v2_baseline.py
+```
+
+报告不得包含完整 URL、host、身份、正文或凭证。没有显式独立 `MEMORY_EMBEDDING_*` 时，
+runner 必须返回 `pending`，不能将 stub/deterministic 运行写成真实 baseline。当前 Dataset SHA
+为 `1fbd99fad678eca5e6f3d4c8cea8198b7e41c69c1e785a790e3d212dafb58925`，质量报告状态必须保持
+`pending independent dataset acceptance`。

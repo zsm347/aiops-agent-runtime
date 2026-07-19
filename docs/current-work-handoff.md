@@ -75,6 +75,24 @@
 
 详见 `docs/M-P1-real-embedding-retrieval-plan.md`。
 
+#### M-P1-R2 高质量检索 Dataset 与离线校准
+
+状态：`implementation complete / dev calibration pending explicit runtime configuration`
+
+- 新增独立 `memory_retrieval_v2` Dataset：60 条 fixture、48 条 dev query（30 semantic、10
+  no-match、8 identity isolation）和 12 条冻结 holdout；holdout 不进入 runner 或校准。
+- 新增 `src/superbiz_agent/evals/memory_retrieval_v2.py`，负责 schema、Dataset 质量分析、逐
+  case 脱敏 observation、top1 与 top1/top2 margin 的 observed-breakpoint 校准和 Pareto
+  frontier。不会选择或写入 production threshold。
+- 新增 v2 Dataset generator、quality runner、真实 PostgreSQL runner 及专项测试；报告只保存
+  query SHA、evidence ID、score、rank、latency 和哈希，不保存 query 原文、正文、身份或凭证。
+- 本机隔离 PostgreSQL 16.14 + pgvector 0.8.5 已启动并完成专用数据库、comment、owner、空库和
+  Alembic head 准备。真实 run 尚未调用，因为当前进程没有显式 `MEMORY_EMBEDDING_*` 配置；
+  不读取 `.env`，不从 Chat/RAG 配置回退。
+- Dataset SHA：`1fbd99fad678eca5e6f3d4c8cea8198b7e41c69c1e785a790e3d212dafb58925`。
+- 目标状态仍为 `M-P1-R2 dev calibration executed / pending independent acceptance`；没有
+  修改 v1、production threshold、Holdout、M-P3 或 RAG。
+
 ### M-R1 生产 prompt、tool 语义与 Core no-op
 
 实现状态：`implementation submitted / deterministic acceptance passed / real guardrails pending`

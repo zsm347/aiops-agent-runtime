@@ -11,4 +11,3 @@
 - Stop condition: 48/48 dev cases executed with zero infrastructure failure, artifacts hashed, fixture cleanup verified
 - Forbidden: holdout execution, production threshold changes, production gating, rerank, M-P3, frozen asset changes
 - Fallback: report `infrastructure_pending` without fabricating baseline evidence
-

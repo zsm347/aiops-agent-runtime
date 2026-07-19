@@ -558,5 +558,22 @@ python scripts/run_memory_retrieval_v2_baseline.py
 
 报告不得包含完整 URL、host、身份、正文或凭证。没有显式独立 `MEMORY_EMBEDDING_*` 时，
 runner 必须返回 `pending`，不能将 stub/deterministic 运行写成真实 baseline。当前 Dataset SHA
-为 `1fbd99fad678eca5e6f3d4c8cea8198b7e41c69c1e785a790e3d212dafb58925`，质量报告状态必须保持
+为 `14e4b025c56c909116cd5ea134ffb6cb957bedcf9454c6cda4264f94a566caac`，质量报告状态必须保持
 `pending independent dataset acceptance`。
+
+真实预检第一次使用 Dataset SHA `1fbd99fa...b58925`，发现 S24/S29/S30 的 scope filter 会
+在 SQL 查询前排除自身 qrel。该原始 report/calibration 保持不变并由独立 assessment 标记为
+`invalid_dataset_contract`，不得用于阈值结论。整改新增 qrel filter-reachability 质量门禁，只
+修正这三处 scope metadata；没有修改 query、qrel、正文或 forbidden evidence。
+
+修正后的唯一有效 run 使用 `dashscope-openai-compatible/text-embedding-v4/1024`，planned /
+executed / skipped / infrastructure failure 为 `48/48/0/0`，按 adapter contract 计算 API
+request `54/54`。有效 superset 指标为：HitRate@1 `1.0`、HitRate@3 `1.0`、Recall@3/5
+`0.9833/0.9833`、MRR `1.0`、hard-negative forbidden `0`、identity leakage/forbidden
+`0/0`。superset threshold=-1 的 no-match FPR `1.0` 和 isolation empty `0` 不能解释为生产
+配置质量。
+
+Observed-breakpoint calibration 状态为 `calibration_frontier_available`，1519 个离线点、4 个
+Pareto 点。安全分离点的 answerable acceptance `0.90`、no-match FPR `0`、isolation empty
+`1.0`、semantic Recall@3 `0.8833`；false rejection 为 S02/S29/S30。该点仅是 dev 可行性，
+`production_candidate=null`，不修改生产默认 threshold `0.5`。

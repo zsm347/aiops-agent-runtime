@@ -77,7 +77,7 @@
 
 #### M-P1-R2 高质量检索 Dataset 与离线校准
 
-状态：`implementation complete / dev calibration pending explicit runtime configuration`
+状态：`M-P1-R2 dev calibration executed / pending independent acceptance`
 
 - 新增独立 `memory_retrieval_v2` Dataset：60 条 fixture、48 条 dev query（30 semantic、10
   no-match、8 identity isolation）和 12 条冻结 holdout；holdout 不进入 runner 或校准。
@@ -87,11 +87,21 @@
 - 新增 v2 Dataset generator、quality runner、真实 PostgreSQL runner 及专项测试；报告只保存
   query SHA、evidence ID、score、rank、latency 和哈希，不保存 query 原文、正文、身份或凭证。
 - 本机隔离 PostgreSQL 16.14 + pgvector 0.8.5 已完成专用数据库、comment、owner、空库和
-  Alembic head preflight；M-P1 `7/7`、M-P2 `39/39` 均为 0 skip。真实 run 尚未调用，因为
-  当前进程没有显式 `MEMORY_EMBEDDING_*` 配置；不读取 `.env`，不从 Chat/RAG 配置回退。
-  preflight 后已删除全部一次性数据库和角色并停止 PostgreSQL 服务，无残留测试行。
-- Dataset SHA：`1fbd99fad678eca5e6f3d4c8cea8198b7e41c69c1e785a790e3d212dafb58925`。
-- 目标状态仍为 `M-P1-R2 dev calibration executed / pending independent acceptance`；没有
+  Alembic head；真实 `text-embedding-v4/1024` 有效 run 为 48/48、0 skip、0 infrastructure
+  failure，按 adapter contract 计算 54 个 API request。没有打印、修改或写入凭证。
+- 第一次真实预检发现 S24/S29/S30 的 scope filter 会排除自身 qrel，原 Dataset SHA
+  `1fbd...b58925` 与原始报告保持不变并标记 invalid；新增 filter-reachability 质量门禁后，
+  只修正三处 scope metadata，有效 Dataset SHA 为
+  `14e4b025c56c909116cd5ea134ffb6cb957bedcf9454c6cda4264f94a566caac`。
+- 有效 superset 结果：semantic HitRate@1/@3 `1.0/1.0`、Recall@3/@5
+  `0.9833/0.9833`、MRR `1.0`、hard-negative forbidden `0`；identity leakage/forbidden
+  `0/0`。threshold=-1 的 no-match FPR=1 和 isolation empty=0 仅是 superset scan 口径。
+- calibration 为 `calibration_frontier_available`，4 个 Pareto 点；安全分离点为 dev 离线
+  可行性证据，不是 production candidate：answerable acceptance `0.90`、no-match FPR `0`、
+  isolation empty `1.0`、semantic Recall@3 `0.8833`。生产默认 `0.5` 未修改。
+- M-P1 `7/7`、M-P2 `39/39` 均为 0 skip。有效 run 清理后 fixture rows 为 0；三个一次性
+  数据库、测试角色均已删除，PostgreSQL 服务已停止。
+- 当前状态为 `M-P1-R2 dev calibration executed / pending independent acceptance`；没有
   修改 v1、production threshold、Holdout、M-P3 或 RAG。
 
 ### M-R1 生产 prompt、tool 语义与 Core no-op

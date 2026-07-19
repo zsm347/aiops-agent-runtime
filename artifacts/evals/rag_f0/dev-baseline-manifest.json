@@ -1,0 +1,58 @@
+{
+  "acceptance": "pending_independent_quality_acceptance",
+  "artifacts": {
+    "dev-baseline-report.md": "fd7524e52c7b70a44f73be41298ee1818798fc169af153922e0bf20096740e37",
+    "dev-baseline.json": "2f32919cd71362b587c1ec837d2991549dfd59cc916811df16ba9586ac302d26"
+  },
+  "code_commit": "7b45aa3d02e5afcb1b8ccfcfd869fd6da587f2dc",
+  "dataset_sha256": "0627e66b0b5b40cb1fbe326f2dfb980be2f43440d264056b5ebc774e157d26ec",
+  "embedding": {
+    "batch_size": 10,
+    "baseline_api_requests": 70,
+    "credential_source": "model_gateway_authorized",
+    "dimension": 1024,
+    "document_chunks": 143,
+    "document_embedding_requests": 22,
+    "model": "text-embedding-v4",
+    "provider": "dashscope-openai-compatible",
+    "query_embedding_requests": 48,
+    "version": "text-embedding-v4"
+  },
+  "execution": {
+    "executed": 48,
+    "failed": 0,
+    "infrastructure_failure_count": 0,
+    "planned": 48,
+    "skipped": 0
+  },
+  "finished_at": "2026-07-17T13:23:52.033598Z",
+  "infrastructure": {
+    "cleanup_failures": 0,
+    "milvus_collection_absent_after_cleanup": true,
+    "milvus_path_deleted": true,
+    "postgresql_database_deleted": true,
+    "postgresql_document_rows_after_cleanup": 0,
+    "postgresql_knowledge_base_rows_after_cleanup": 0,
+    "postgresql_role_deleted": true,
+    "postgresql_service_stopped": true
+  },
+  "retrieval": {
+    "final_top_k": 10,
+    "hybrid_top_k": 10,
+    "rerank_enabled": false,
+    "rrf_k": 60,
+    "top3_source": "prefix_of_same_top10_ranking"
+  },
+  "runtime_versions": {
+    "llama_index_core": "0.14.23",
+    "llama_index_milvus_adapter": "1.1.0",
+    "milvus_lite": "3.0",
+    "openai": "2.45.0",
+    "pgvector": "0.8.5",
+    "postgresql": "16.14",
+    "pymilvus": "2.6.16"
+  },
+  "split": "dev",
+  "started_at": "2026-07-17T13:23:40.738692Z",
+  "status": "completed"
+}

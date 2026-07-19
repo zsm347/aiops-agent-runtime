@@ -1,0 +1,51 @@
+{
+  "acceptance": "pending_independent_quality_acceptance",
+  "aggregation_script_git_blob": "45b145e7585a1f65b11b956387ade1db89eda979",
+  "artifacts": {
+    "CHECKLIST.md": "5c63b5bb0e749a6268e4016a1a2e4cf003957e8cf8873ce723034d4d217680e6",
+    "PLAN.md": "7ce58207f22428c6906c388294f4a9734a9bc8013f1e89eb24a7d60a1edb28dd",
+    "bm25.json": "6abe22248cf09af763e1b474985fa630068df87ab7cb976701aae030a93a1f28",
+    "dense.json": "f719c3890bcffe29f177fa37dff2485edcd6f0c732b1768b803552a062b9bb37",
+    "hybrid.json": "e7dce49ba38fc3fd5de228421c2575b5710aab7adc8576ed8275f1d2d041713b",
+    "report.md": "f5cb56bb276c7e342978e608ca0c0bf929ac22981d6ee3a42f20ee449fcf0f36",
+    "summary.json": "38ef01eab96d7771bf4e75d0283166c8dfcd7c19aaa170e9b52d016ab077bc4b"
+  },
+  "cleanup": {
+    "bm25_only": "passed_zero_residual",
+    "dense_only": "passed_zero_residual",
+    "hybrid": "passed_zero_residual"
+  },
+  "dataset_sha256": "0627e66b0b5b40cb1fbe326f2dfb980be2f43440d264056b5ebc774e157d26ec",
+  "embedding": {
+    "batch_size": 10,
+    "campaign_api_requests": 162,
+    "dimension": 1024,
+    "document_embedding_requests_per_mode": 22,
+    "model": "text-embedding-v4",
+    "provider": "dashscope-openai-compatible",
+    "query_embedding_requests": {
+      "bm25_only": 0,
+      "dense_only": 48,
+      "hybrid": 48
+    },
+    "version": "text-embedding-v4"
+  },
+  "execution": {
+    "bm25_only": "48/48_once",
+    "dense_only": "48/48_once",
+    "hybrid": "48/48_once"
+  },
+  "holdout": "not_read_or_run",
+  "rerank": "disabled",
+  "run_code_commit": "287bee4c508c450117961e3f7127c5257c851184",
+  "runtime_versions": {
+    "llama_index_core": "0.14.23",
+    "llama_index_milvus_adapter": "1.1.0",
+    "milvus_lite": "3.0",
+    "openai": "2.45.0",
+    "pgvector": "0.8.5",
+    "postgresql": "16.14",
+    "pymilvus": "2.6.16"
+  },
+  "status": "completed"
+}

@@ -12,7 +12,7 @@ from superbiz_agent.persistence.repositories.rag import (
 )
 from superbiz_agent.rag.embedding import build_rag_embedding_service
 from superbiz_agent.rag.milvus_store import MilvusHybridChunkStore
-from superbiz_agent.rag.models import RagRetrievalRequest, RagRetrievalResult
+from superbiz_agent.rag.models import RagRetrievalMode, RagRetrievalRequest, RagRetrievalResult
 from superbiz_agent.rag.retrieval import (
     MilvusRagRetrievalService,
     RepositoryDefaultKnowledgeBaseResolver,
@@ -76,7 +76,11 @@ class RealRagRuntime:
             self._closed = True
 
 
-def build_real_rag_retrieval_service(settings: Settings) -> RealRagRuntime:
+def build_real_rag_retrieval_service(
+    settings: Settings,
+    *,
+    retrieval_mode: RagRetrievalMode = RagRetrievalMode.HYBRID,
+) -> RealRagRuntime:
     embedding = build_rag_embedding_service(settings)
     chunk_store = MilvusHybridChunkStore(
         uri=settings.rag_milvus_uri,
@@ -95,6 +99,7 @@ def build_real_rag_retrieval_service(settings: Settings) -> RealRagRuntime:
         document_repository=documents,
         embedding_service=embedding,
         chunk_store=chunk_store,
+        retrieval_mode=retrieval_mode,
     )
     return RealRagRuntime(
         retrieval_service=retrieval,

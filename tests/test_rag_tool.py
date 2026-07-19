@@ -526,9 +526,10 @@ async def test_real_runtime_factory_owns_store_embedding_and_engine_lifecycle() 
     runtime = build_real_rag_retrieval_service(
         Settings(
             rag_enabled=True,
-            rag_fixture_mode=False,
-            rag_embedding_api_key="test-only-key",
-            memory_enabled=False,
+                rag_fixture_mode=False,
+                rag_embedding_api_key="test-only-key",
+                rag_embedding_base_url="https://embedding.invalid/v1",
+                memory_enabled=False,
             _env_file=None,
         )
     )

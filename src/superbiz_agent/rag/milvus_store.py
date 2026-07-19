@@ -26,8 +26,12 @@ from pymilvus import DataType, FunctionType, MilvusClient
 from pymilvus.client.types import LoadState
 
 from superbiz_agent.config import RAG_TOP_K_MAX
-from superbiz_agent.rag.embedding import RagEmbeddingBatch, RagQueryEmbedding
-from superbiz_agent.rag.models import RagPreparedChunk
+from superbiz_agent.rag.embedding import (
+    RagEmbeddingBatch,
+    RagEmbeddingIdentity,
+    RagQueryEmbedding,
+)
+from superbiz_agent.rag.models import RagPreparedChunk, RagRetrievalMode
 
 
 ID_FIELD = "id"
@@ -223,18 +227,53 @@ class MilvusHybridChunkStore:
         knowledge_base_id: str,
         similarity_top_k: int,
     ) -> tuple[RagHybridSearchHit, ...]:
-        self._validate_search_input(
+        return await self.search(
+            mode=RagRetrievalMode.HYBRID,
             query_str=query_str,
             query_embedding=query_embedding,
+            embedding_identity=RagEmbeddingIdentity(
+                provider=query_embedding.provider,
+                model=query_embedding.model,
+                version=query_embedding.version,
+                dimension=query_embedding.dimension,
+            ),
             tenant_id=tenant_id,
             knowledge_base_id=knowledge_base_id,
             similarity_top_k=similarity_top_k,
         )
+
+    async def search(
+        self,
+        *,
+        mode: RagRetrievalMode,
+        query_str: str,
+        query_embedding: RagQueryEmbedding | None,
+        embedding_identity: RagEmbeddingIdentity,
+        tenant_id: str,
+        knowledge_base_id: str,
+        similarity_top_k: int,
+    ) -> tuple[RagHybridSearchHit, ...]:
+        self._validate_search_input(
+            mode=mode,
+            query_str=query_str,
+            query_embedding=query_embedding,
+            embedding_identity=embedding_identity,
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            similarity_top_k=similarity_top_k,
+        )
+        llama_mode = {
+            RagRetrievalMode.DENSE: VectorStoreQueryMode.DEFAULT,
+            RagRetrievalMode.BM25: VectorStoreQueryMode.SPARSE,
+            RagRetrievalMode.HYBRID: VectorStoreQueryMode.HYBRID,
+        }[mode]
         query = VectorStoreQuery(
-            query_embedding=list(query_embedding.vector),
+            query_embedding=(
+                list(query_embedding.vector) if query_embedding is not None else None
+            ),
             query_str=query_str,
             similarity_top_k=similarity_top_k,
-            mode=VectorStoreQueryMode.HYBRID,
+            mode=llama_mode,
             filters=MetadataFilters(
                 filters=[
                     MetadataFilter(
@@ -261,7 +300,7 @@ class MilvusHybridChunkStore:
         try:
             return self._normalize_search_result(
                 result,
-                query_embedding=query_embedding,
+                embedding_identity=embedding_identity,
                 tenant_id=tenant_id,
                 knowledge_base_id=knowledge_base_id,
             )
@@ -527,14 +566,23 @@ class MilvusHybridChunkStore:
     def _validate_search_input(
         self,
         *,
+        mode: RagRetrievalMode,
         query_str: str,
-        query_embedding: RagQueryEmbedding,
+        query_embedding: RagQueryEmbedding | None,
+        embedding_identity: RagEmbeddingIdentity,
         tenant_id: str,
         knowledge_base_id: str,
         similarity_top_k: int,
     ) -> None:
-        if not isinstance(query_embedding, RagQueryEmbedding):
+        if not isinstance(mode, RagRetrievalMode):
+            raise MilvusStoreError("Retrieval mode is invalid.")
+        if mode is RagRetrievalMode.BM25:
+            if query_embedding is not None:
+                raise MilvusStoreError("BM25-only search must not receive a query embedding.")
+        elif not isinstance(query_embedding, RagQueryEmbedding):
             raise MilvusStoreError("Query embedding contract is invalid.")
+        if not isinstance(embedding_identity, RagEmbeddingIdentity):
+            raise MilvusStoreError("Embedding identity contract is invalid.")
         if not isinstance(query_str, str) or not query_str.strip() or len(query_str) > 2000:
             raise MilvusStoreError("Milvus query text is invalid.")
         for name, value in (("tenant_id", tenant_id), ("knowledge_base_id", knowledge_base_id)):
@@ -548,15 +596,23 @@ class MilvusHybridChunkStore:
         ):
             raise MilvusStoreError("similarity_top_k is outside the frozen range.")
         for name, value in (
-            ("provider", query_embedding.provider),
-            ("model", query_embedding.model),
-            ("version", query_embedding.version),
+            ("provider", embedding_identity.provider),
+            ("model", embedding_identity.model),
+            ("version", embedding_identity.version),
         ):
             if not isinstance(value, str) or not value.strip():
                 raise MilvusStoreError(f"Query embedding {name} must not be blank.")
-        if query_embedding.dimension != self.dimension:
-            raise MilvusStoreError("Query embedding dimension does not match the collection.")
-        self._validate_vector(query_embedding.vector)
+        if embedding_identity.dimension != self.dimension:
+            raise MilvusStoreError("Embedding identity dimension does not match the collection.")
+        if query_embedding is not None:
+            if (
+                query_embedding.provider != embedding_identity.provider
+                or query_embedding.model != embedding_identity.model
+                or query_embedding.version != embedding_identity.version
+                or query_embedding.dimension != embedding_identity.dimension
+            ):
+                raise MilvusStoreError("Query embedding identity is incompatible.")
+            self._validate_vector(query_embedding.vector)
 
     def _validate_vector(self, vector: Any) -> None:
         if isinstance(vector, (str, bytes)) or not isinstance(vector, Sequence):
@@ -575,7 +631,7 @@ class MilvusHybridChunkStore:
         self,
         result: Any,
         *,
-        query_embedding: RagQueryEmbedding,
+        embedding_identity: RagEmbeddingIdentity,
         tenant_id: str,
         knowledge_base_id: str,
     ) -> tuple[RagHybridSearchHit, ...]:
@@ -605,7 +661,7 @@ class MilvusHybridChunkStore:
                     chunk_id,
                     node,
                     score,
-                    query_embedding=query_embedding,
+                    embedding_identity=embedding_identity,
                     tenant_id=tenant_id,
                     knowledge_base_id=knowledge_base_id,
                 )
@@ -624,7 +680,7 @@ class MilvusHybridChunkStore:
         node: Any,
         score: Any,
         *,
-        query_embedding: RagQueryEmbedding,
+        embedding_identity: RagEmbeddingIdentity,
         tenant_id: str,
         knowledge_base_id: str,
     ) -> RagHybridSearchHit:
@@ -657,10 +713,10 @@ class MilvusHybridChunkStore:
         self._nonnegative_int(metadata.get("chunk_index"), "chunk_index")
 
         if (
-            metadata.get("embedding_provider") != query_embedding.provider
-            or metadata.get("embedding_model") != query_embedding.model
-            or metadata.get("embedding_version") != query_embedding.version
-            or metadata.get("embedding_dimension") != query_embedding.dimension
+            metadata.get("embedding_provider") != embedding_identity.provider
+            or metadata.get("embedding_model") != embedding_identity.model
+            or metadata.get("embedding_version") != embedding_identity.version
+            or metadata.get("embedding_dimension") != embedding_identity.dimension
         ):
             raise MilvusStoreError("Milvus hit embedding identity is incompatible.")
 

@@ -34,6 +34,12 @@ class RagToolResultContractError(ValueError):
     """Raised when a retrieval result cannot be safely exposed to a tool caller."""
 
 
+class RagRetrievalMode(str, Enum):
+    DENSE = "dense_only"
+    BM25 = "bm25_only"
+    HYBRID = "hybrid"
+
+
 @dataclass(frozen=True)
 class RagRetrievalScope:
     tenant_id: str

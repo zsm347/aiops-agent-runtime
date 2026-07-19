@@ -25,6 +25,7 @@ from pymilvus import DataType, FunctionType, MilvusClient
 
 from superbiz_agent.rag.embedding import (
     DeterministicRagEmbeddingService,
+    RagEmbeddingIdentity,
     RagQueryEmbedding,
 )
 from superbiz_agent.rag.milvus_store import (
@@ -45,7 +46,7 @@ from superbiz_agent.rag.milvus_store import (
     MilvusStoreIsolationError,
     encode_milvus_filter_value,
 )
-from superbiz_agent.rag.models import RagPreparedChunk
+from superbiz_agent.rag.models import RagPreparedChunk, RagRetrievalMode
 
 
 def _chunk(
@@ -975,16 +976,27 @@ async def test_milvus_lite_hybrid_transport_encoding_isolation_and_reopen(
         ]
 
         query_embedding = await embedding.embed_query(chunk.content)
-        hits = await store.hybrid_search(
-            query_str=chunk.content,
-            query_embedding=query_embedding,
-            tenant_id=tenant_id,
-            knowledge_base_id=knowledge_base_id,
-            similarity_top_k=10,
+        embedding_identity = RagEmbeddingIdentity(
+            provider=query_embedding.provider,
+            model=query_embedding.model,
+            version=query_embedding.version,
+            dimension=query_embedding.dimension,
         )
-        assert [hit.chunk_id for hit in hits] == [f"chunk-{index}"]
-        assert all(hit.tenant_id == tenant_id for hit in hits)
-        assert all(hit.knowledge_base_id == knowledge_base_id for hit in hits)
+        for mode in RagRetrievalMode:
+            hits = await store.search(
+                mode=mode,
+                query_str=chunk.content,
+                query_embedding=(
+                    None if mode is RagRetrievalMode.BM25 else query_embedding
+                ),
+                embedding_identity=embedding_identity,
+                tenant_id=tenant_id,
+                knowledge_base_id=knowledge_base_id,
+                similarity_top_k=10,
+            )
+            assert [hit.chunk_id for hit in hits] == [f"chunk-{index}"]
+            assert all(hit.tenant_id == tenant_id for hit in hits)
+            assert all(hit.knowledge_base_id == knowledge_base_id for hit in hits)
 
     no_results = await store.hybrid_search(
         query_str="不存在的检索内容",

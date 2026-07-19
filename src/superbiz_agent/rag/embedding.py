@@ -34,6 +34,14 @@ class RagQueryEmbedding:
     dimension: int
 
 
+@dataclass(frozen=True)
+class RagEmbeddingIdentity:
+    provider: str
+    model: str
+    version: str
+    dimension: int
+
+
 class RagEmbeddingService(Protocol):
     async def embed_documents(self, texts: Sequence[str]) -> RagEmbeddingBatch: ...
 
@@ -249,8 +257,10 @@ class DeterministicRagEmbeddingService:
 def build_rag_embedding_service(
     settings: Settings, *, client: Any | None = None
 ) -> OpenAICompatibleRagEmbeddingService:
-    api_key = settings.rag_embedding_api_key or settings.model_api_key
-    base_url = settings.rag_embedding_base_url or settings.model_base_url
+    api_key = settings.rag_embedding_api_key
+    base_url = settings.rag_embedding_base_url
+    if not api_key or not base_url:
+        raise ValueError("RAG-specific embedding API key and base URL are required.")
     return OpenAICompatibleRagEmbeddingService(
         provider=settings.rag_embedding_provider,
         model=settings.rag_embedding_model,

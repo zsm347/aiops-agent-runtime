@@ -18,10 +18,12 @@ from superbiz_agent.memory.errors import (
     MemoryStoreContractError,
     MemoryStoreUnavailableError,
 )
+from superbiz_agent.memory.embedding import MemoryEmbeddingIdentity
 from superbiz_agent.memory.persistence_contract import (
     ACTIVE_CONTENT_HASH_CHECK,
     ACTIVE_EXACT_INDEX,
     CORE_UNIQUE_CONSTRAINT,
+    M_P1_REQUIRED_CHECKS,
     M_P2_REQUIRED_CHECKS,
 )
 from superbiz_agent.memory.schemas import CoreMemoryBlock, LongTermMemory, utc_now
@@ -170,6 +172,7 @@ def _memory_row(memory: LongTermMemory) -> dict[str, Any]:
         "topic": memory.topic,
         "content": memory.content,
         "source": memory.source,
+        "embedding_provider": memory.embedding_provider,
         "embedding_model": memory.embedding_model,
         "embedding_dimension": memory.embedding_dimension,
         "embedding_metric": memory.embedding_metric,
@@ -213,6 +216,7 @@ def _ready_catalog_results(
     constraint_overrides: dict[str, Any] | None = None,
     index_overrides: dict[str, Any] | None = None,
     vector_overrides: dict[str, Any] | None = None,
+    provider_overrides: dict[str, Any] | None = None,
     core_hash_overrides: dict[str, Any] | None = None,
 ) -> list[_MappingsResult]:
     memory_oid = 101
@@ -229,6 +233,16 @@ def _ready_catalog_results(
             "scope_env IS NULL OR btrim(scope_env::text) <> ''::text"
         ),
         "chk_long_term_memory_tags_array": "jsonb_typeof(tags) = 'array'::text",
+        "chk_long_term_memory_embedding_provider_nonblank": (
+            "btrim(embedding_provider::text) <> ''::text"
+        ),
+        "chk_long_term_memory_embedding_vector_identity": (
+            "embedding IS NULL OR (embedding_dimension = 1024 "
+            "AND embedding_metric::text = 'cosine'::text "
+            "AND btrim(embedding_provider::text) <> ''::text "
+            "AND btrim(embedding_model::text) <> ''::text "
+            "AND btrim(embedding_version::text) <> ''::text)"
+        ),
         "chk_core_memory_block_key": (
             "block_key::text = ANY (ARRAY['user_rules'::character varying, "
             "'user_ops_profile'::character varying, "
@@ -246,7 +260,7 @@ def _ready_catalog_results(
         "chk_long_term_memory_scope_service_nonblank",
         "chk_long_term_memory_scope_env_nonblank",
         "chk_long_term_memory_tags_array",
-    }
+    } | M_P1_REQUIRED_CHECKS
     rows = [
         {
             "relation_oid": memory_oid if name in memory_names else core_oid,
@@ -301,6 +315,7 @@ def _ready_catalog_results(
     vector = {
         "relation_oid": memory_oid,
         "attname": "embedding",
+        "attnotnull": False,
         "formatted_type": "vector(1024)",
     }
     if vector_overrides:
@@ -312,6 +327,14 @@ def _ready_catalog_results(
     }
     if core_hash_overrides:
         core_hash.update(core_hash_overrides)
+    provider = {
+        "relation_oid": memory_oid,
+        "attname": "embedding_provider",
+        "attnotnull": True,
+        "formatted_type": "character varying",
+    }
+    if provider_overrides:
+        provider.update(provider_overrides)
     return [
         _MappingsResult(
             one={
@@ -323,7 +346,12 @@ def _ready_catalog_results(
         ),
         _MappingsResult(rows=rows),
         _MappingsResult(one=index),
-        _MappingsResult(one=vector),
+        _MappingsResult(
+            rows=[
+                vector,
+                provider,
+            ]
+        ),
         _MappingsResult(one=core_hash),
     ]
 
@@ -740,6 +768,71 @@ async def test_readiness_accepts_only_redundant_expression_parentheses() -> None
     await _repository(session).ensure_ready()
 
 
+@pytest.mark.asyncio
+async def test_readiness_rejects_nullable_embedding_provider_column() -> None:
+    session = _Session(
+        results=_ready_catalog_results(provider_overrides={"attnotnull": False})
+    )
+
+    with pytest.raises(MemoryStoreContractError):
+        await _repository(session).ensure_ready()
+
+
+@pytest.mark.asyncio
+async def test_vector_search_compiles_all_filters_cosine_order_and_limit() -> None:
+    memory = _memory(
+        embedding=[0.25] * 1024,
+        embedding_provider="dashscope-openai-compatible",
+        embedding_model="text-embedding-v4",
+        embedding_dimension=1024,
+        embedding_version="text-embedding-v4",
+    )
+    row = _memory_row(memory) | {"similarity": 0.875}
+    session = _Session(results=[_MappingsResult(rows=[row])])
+    identity = MemoryEmbeddingIdentity(
+        provider="dashscope-openai-compatible",
+        model="text-embedding-v4",
+        version="text-embedding-v4",
+        dimension=1024,
+    )
+
+    hits = await _repository(session).search_active_memories_by_vector(
+        "tenant-a",
+        "user-a",
+        "agent-a",
+        [0.5] * 1024,
+        identity,
+        types=["experience"],
+        scope_service="order-service",
+        scope_env="production",
+        tags=["first"],
+        min_similarity=0.7,
+        limit=3,
+    )
+
+    assert [(hit.memory.id, hit.similarity) for hit in hits] == [("memory-a", 0.875)]
+    sql = _sql(session.statements[0])
+    assert "long_term_memory.embedding <=>" in sql
+    for column in (
+        "tenant_id",
+        "user_id",
+        "agent_id",
+        "status",
+        "type",
+        "embedding_provider",
+        "embedding_model",
+        "embedding_version",
+        "embedding_dimension",
+        "embedding_metric",
+        "scope_service",
+        "scope_env",
+        "tags",
+    ):
+        assert f"long_term_memory.{column}" in sql
+    assert "ORDER BY long_term_memory.embedding <=>" in sql
+    assert "LIMIT" in sql
+
+
 def test_migration_freezes_canonicalizer_names_and_single_head() -> None:
     migration = _migration_module()
 
@@ -759,6 +852,25 @@ def test_migration_freezes_canonicalizer_names_and_single_head() -> None:
             canonicalize_archival_content(sample)
         )
         assert migration._canonical_content_hash(sample) == canonical_content_hash(sample)
+
+
+def test_m_p1_migration_extends_m_p2_head_and_freezes_provider_constraints() -> None:
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "20260717_01_add_memory_embedding_provider.py"
+    )
+    spec = spec_from_file_location("m_p1_memory_migration", path)
+    assert spec is not None and spec.loader is not None
+    migration = module_from_spec(spec)
+    spec.loader.exec_module(migration)
+
+    assert migration.revision == "20260717_01"
+    assert migration.down_revision == "20260714_01"
+    source = path.read_text(encoding="utf-8")
+    assert "EMBEDDING_PROVIDER_NONBLANK_CHECK" in source
+    assert "EMBEDDING_VECTOR_IDENTITY_CHECK" in source
 
 
 def test_migration_rejects_malformed_existing_core_hash_before_backfill() -> None:

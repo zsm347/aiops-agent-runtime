@@ -9,8 +9,8 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import case, func, literal_column, select, text, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import case, func, literal_column, or_, select, text, update
+from sqlalchemy.dialects.postgresql import array, insert
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -26,13 +26,20 @@ from superbiz_agent.memory.errors import (
     MemoryStoreContractError,
     MemoryStoreUnavailableError,
 )
+from superbiz_agent.memory.embedding import MemoryEmbeddingIdentity
 from superbiz_agent.memory.persistence_contract import (
     ACTIVE_EXACT_INDEX,
     ACTIVE_EXACT_PREDICATE_SQL,
     CORE_UNIQUE_CONSTRAINT,
+    M_P1_REQUIRED_CHECKS,
     M_P2_REQUIRED_CHECKS,
 )
-from superbiz_agent.memory.ports import CoreContentWriteResult, ExactMemoryWriteResult
+from superbiz_agent.memory.ports import (
+    CoreContentWriteResult,
+    EmbeddingBackfillCandidate,
+    ExactMemoryWriteResult,
+    VectorMemorySearchHit,
+)
 from superbiz_agent.memory.schemas import (
     CORE_BLOCK_SPECS,
     DEFAULT_CORE_BLOCK_KEYS,
@@ -60,6 +67,7 @@ _MEMORY_COLUMNS = (
     LongTermMemory.topic,
     LongTermMemory.content,
     LongTermMemory.source,
+    LongTermMemory.embedding_provider,
     LongTermMemory.embedding_model,
     LongTermMemory.embedding_dimension,
     LongTermMemory.embedding_metric,
@@ -414,6 +422,211 @@ class PostgresMemoryRepository:
             ]
         return memories
 
+    async def search_active_memories_by_vector(
+        self,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+        query_embedding: Sequence[float],
+        embedding_identity: MemoryEmbeddingIdentity,
+        *,
+        types: list[str],
+        scope_service: str | None = None,
+        scope_env: str | None = None,
+        tags: list[str] | None = None,
+        min_similarity: float,
+        limit: int,
+    ) -> list[VectorMemorySearchHit]:
+        _require_identity(tenant_id, user_id, agent_id)
+        _require_embedding_identity(embedding_identity)
+        vector = _validated_embedding_vector(query_embedding, embedding_identity.dimension)
+        _validate_memory_types(types)
+        if (
+            not isinstance(min_similarity, (int, float))
+            or isinstance(min_similarity, bool)
+            or not math.isfinite(min_similarity)
+            or min_similarity < -1.0
+            or min_similarity > 1.0
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or limit < 0
+            or limit > 1000
+        ):
+            raise MemoryStoreContractError()
+        if tags is not None and (
+            not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags)
+        ):
+            raise MemoryStoreContractError()
+        normalized_service = _blank_to_none(scope_service)
+        normalized_env = _blank_to_none(scope_env)
+        normalized_tags = stable_tag_union([], tags or [])
+        if limit == 0:
+            return []
+
+        distance = LongTermMemory.embedding.cosine_distance(vector)
+        statement = select(*_MEMORY_COLUMNS, (1.0 - distance).label("similarity")).where(
+            LongTermMemory.tenant_id == tenant_id,
+            LongTermMemory.user_id == user_id,
+            LongTermMemory.agent_id == agent_id,
+            LongTermMemory.status == "active",
+            LongTermMemory.type.in_(types),
+            LongTermMemory.embedding.is_not(None),
+            LongTermMemory.embedding_provider == embedding_identity.provider,
+            LongTermMemory.embedding_model == embedding_identity.model,
+            LongTermMemory.embedding_version == embedding_identity.version,
+            LongTermMemory.embedding_dimension == embedding_identity.dimension,
+            LongTermMemory.embedding_metric == "cosine",
+            distance <= 1.0 - float(min_similarity),
+        )
+        if normalized_service is not None:
+            statement = statement.where(LongTermMemory.scope_service == normalized_service)
+        if normalized_env is not None:
+            statement = statement.where(LongTermMemory.scope_env == normalized_env)
+        if normalized_tags:
+            statement = statement.where(LongTermMemory.tags.op("?|")(array(normalized_tags)))
+        statement = statement.order_by(distance, LongTermMemory.id).limit(limit)
+
+        try:
+            async with self.sessionmaker() as session:
+                rows = (await session.execute(statement)).mappings().all()
+        except MemoryPersistenceError:
+            raise
+        except (OperationalError, OSError):
+            raise MemoryStoreUnavailableError() from None
+        except SQLAlchemyError:
+            raise MemoryStoreContractError() from None
+
+        hits: list[VectorMemorySearchHit] = []
+        for row in rows:
+            memory = _memory_record(row)
+            try:
+                similarity = float(row["similarity"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                raise MemoryStoreContractError() from None
+            if (
+                memory.tenant_id != tenant_id
+                or memory.user_id != user_id
+                or memory.agent_id != agent_id
+                or memory.status != "active"
+                or memory.embedding_provider != embedding_identity.provider
+                or memory.embedding_model != embedding_identity.model
+                or memory.embedding_version != embedding_identity.version
+                or memory.embedding_dimension != embedding_identity.dimension
+                or not math.isfinite(similarity)
+                or similarity < min_similarity
+            ):
+                raise MemoryStoreContractError()
+            hits.append(VectorMemorySearchHit(memory=memory, similarity=similarity))
+        return hits
+
+    async def count_embedding_backfill_candidates(
+        self,
+        embedding_identity: MemoryEmbeddingIdentity,
+    ) -> int:
+        _require_embedding_identity(embedding_identity)
+        statement = (
+            select(func.count())
+            .select_from(LongTermMemory)
+            .where(
+                LongTermMemory.status == "active",
+                LongTermMemory.type.in_(_ARCHIVAL_TYPES),
+                _embedding_stale_predicate(embedding_identity),
+            )
+        )
+        try:
+            async with self.sessionmaker() as session:
+                return int(await session.scalar(statement) or 0)
+        except (OperationalError, OSError):
+            raise MemoryStoreUnavailableError() from None
+        except SQLAlchemyError:
+            raise MemoryStoreContractError() from None
+
+    async def list_embedding_backfill_candidates(
+        self,
+        embedding_identity: MemoryEmbeddingIdentity,
+        *,
+        after_id: str | None,
+        limit: int,
+    ) -> list[EmbeddingBackfillCandidate]:
+        _require_embedding_identity(embedding_identity)
+        if (
+            (after_id is not None and (not isinstance(after_id, str) or not after_id.strip()))
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or limit < 1
+            or limit > 1000
+        ):
+            raise MemoryStoreContractError()
+        statement = select(
+            LongTermMemory.id,
+            LongTermMemory.tenant_id,
+            LongTermMemory.user_id,
+            LongTermMemory.agent_id,
+            LongTermMemory.content,
+            LongTermMemory.content_hash,
+            LongTermMemory.updated_at,
+        ).where(
+            LongTermMemory.status == "active",
+            LongTermMemory.type.in_(_ARCHIVAL_TYPES),
+            _embedding_stale_predicate(embedding_identity),
+        )
+        if after_id is not None:
+            statement = statement.where(LongTermMemory.id > after_id)
+        statement = statement.order_by(LongTermMemory.id).limit(limit)
+        try:
+            async with self.sessionmaker() as session:
+                rows = (await session.execute(statement)).mappings().all()
+            return [_embedding_backfill_candidate(row) for row in rows]
+        except MemoryPersistenceError:
+            raise
+        except (OperationalError, OSError):
+            raise MemoryStoreUnavailableError() from None
+        except SQLAlchemyError:
+            raise MemoryStoreContractError() from None
+
+    async def apply_embedding_backfill(
+        self,
+        candidate: EmbeddingBackfillCandidate,
+        embedding: Sequence[float],
+        embedding_identity: MemoryEmbeddingIdentity,
+    ) -> bool:
+        if not isinstance(candidate, EmbeddingBackfillCandidate):
+            raise MemoryStoreContractError()
+        _require_identity(candidate.tenant_id, candidate.user_id, candidate.agent_id)
+        _require_embedding_identity(embedding_identity)
+        vector = _validated_embedding_vector(embedding, embedding_identity.dimension)
+        statement = (
+            update(LongTermMemory)
+            .where(
+                LongTermMemory.id == candidate.id,
+                LongTermMemory.tenant_id == candidate.tenant_id,
+                LongTermMemory.user_id == candidate.user_id,
+                LongTermMemory.agent_id == candidate.agent_id,
+                LongTermMemory.status == "active",
+                LongTermMemory.content == candidate.content,
+                LongTermMemory.content_hash == candidate.content_hash,
+                LongTermMemory.updated_at == candidate.updated_at,
+                _embedding_stale_predicate(embedding_identity),
+            )
+            .values(
+                embedding=vector,
+                embedding_provider=embedding_identity.provider,
+                embedding_model=embedding_identity.model,
+                embedding_version=embedding_identity.version,
+                embedding_dimension=embedding_identity.dimension,
+                embedding_metric="cosine",
+            )
+        )
+        try:
+            async with self.sessionmaker() as session:
+                async with _read_committed_transaction(session):
+                    result = await session.execute(statement)
+                    return result.rowcount == 1
+        except (OperationalError, OSError):
+            raise MemoryStoreUnavailableError() from None
+        except SQLAlchemyError:
+            raise MemoryStoreContractError() from None
+
     async def list_memories_for_scope(
         self,
         tenant_id: str,
@@ -607,23 +820,33 @@ class PostgresMemoryRepository:
         if index_row is None or not _valid_exact_index(index_row, memory_oid=memory_oid):
             raise MemoryStoreContractError()
 
-        vector_row = (
+        memory_column_rows = (
             await session.execute(
                 text(
-                    "SELECT att.attrelid AS relation_oid, att.attname, "
+                    "SELECT att.attrelid AS relation_oid, att.attname, att.attnotnull, "
                     "format_type(att.atttypid, att.atttypmod) AS formatted_type "
                     "FROM pg_attribute att WHERE att.attrelid = :memory_oid "
-                    "AND att.attname = 'embedding' AND att.attnum > 0 "
+                    "AND att.attname IN ('embedding', 'embedding_provider') "
+                    "AND att.attnum > 0 "
                     "AND NOT att.attisdropped"
                 ),
                 {"memory_oid": memory_oid},
             )
-        ).mappings().one_or_none()
+        ).mappings().all()
+        memory_columns = {
+            str(row["attname"]): row for row in memory_column_rows
+        }
+        vector_row = memory_columns.get("embedding")
+        provider_row = memory_columns.get("embedding_provider")
         if (
             vector_row is None
             or int(vector_row["relation_oid"]) != memory_oid
             or str(vector_row["attname"]) != "embedding"
             or str(vector_row["formatted_type"]).lower() != "vector(1024)"
+            or provider_row is None
+            or int(provider_row["relation_oid"]) != memory_oid
+            or str(provider_row["attname"]) != "embedding_provider"
+            or provider_row["attnotnull"] is not True
         ):
             raise MemoryStoreContractError()
 
@@ -678,6 +901,7 @@ def _memory_insert_values(memory: MemoryRecord) -> dict[str, Any]:
         "content": memory.content,
         "source": memory.source,
         "embedding": _embedding_for_write(memory),
+        "embedding_provider": memory.embedding_provider,
         "embedding_model": memory.embedding_model,
         "embedding_dimension": memory.embedding_dimension,
         "embedding_metric": memory.embedding_metric,
@@ -702,13 +926,69 @@ def _embedding_for_write(memory: MemoryRecord) -> list[float] | None:
         for value in memory.embedding
     ):
         raise MemoryStoreContractError()
-    if memory.embedding_model == "local-deterministic":
+    if (
+        memory.embedding_provider == "local-deterministic"
+        or memory.embedding_model == "local-deterministic"
+    ):
+        if (
+            memory.embedding_provider != "local-deterministic"
+            or memory.embedding_model != "local-deterministic"
+        ):
+            raise MemoryStoreContractError()
         if len(memory.embedding) != memory.embedding_dimension:
             raise MemoryStoreContractError()
         return None
-    if memory.embedding_dimension != 1024 or len(memory.embedding) != 1024:
+    if (
+        memory.embedding_provider not in {
+            "openai-compatible",
+            "dashscope-openai-compatible",
+        }
+        or memory.embedding_dimension != 1024
+        or len(memory.embedding) != 1024
+    ):
         raise MemoryStoreContractError()
     return list(memory.embedding)
+
+
+def _require_embedding_identity(identity: MemoryEmbeddingIdentity) -> None:
+    if (
+        not isinstance(identity, MemoryEmbeddingIdentity)
+        or identity.provider not in {
+            "openai-compatible",
+            "dashscope-openai-compatible",
+        }
+        or not identity.model.strip()
+        or not identity.version.strip()
+        or identity.dimension != 1024
+    ):
+        raise MemoryStoreContractError()
+
+
+def _validated_embedding_vector(
+    embedding: Sequence[float],
+    dimension: int,
+) -> list[float]:
+    if (
+        isinstance(embedding, (str, bytes))
+        or not isinstance(embedding, Sequence)
+        or len(embedding) != dimension
+    ):
+        raise MemoryStoreContractError()
+    vector = list(embedding)
+    if any(not _is_finite_number(value) for value in vector):
+        raise MemoryStoreContractError()
+    return [float(value) for value in vector]
+
+
+def _embedding_stale_predicate(identity: MemoryEmbeddingIdentity) -> Any:
+    return or_(
+        LongTermMemory.embedding.is_(None),
+        LongTermMemory.embedding_provider != identity.provider,
+        LongTermMemory.embedding_model != identity.model,
+        LongTermMemory.embedding_version != identity.version,
+        LongTermMemory.embedding_dimension != identity.dimension,
+        LongTermMemory.embedding_metric != "cosine",
+    )
 
 
 def _normalize_archival_candidate(memory: MemoryRecord) -> MemoryRecord:
@@ -740,6 +1020,8 @@ def _normalize_archival_candidate(memory: MemoryRecord) -> MemoryRecord:
     if (
         not isinstance(memory.embedding_model, str)
         or not memory.embedding_model.strip()
+        or not isinstance(memory.embedding_provider, str)
+        or not memory.embedding_provider.strip()
         or not isinstance(memory.embedding_dimension, int)
         or isinstance(memory.embedding_dimension, bool)
         or memory.embedding_dimension < 1
@@ -859,6 +1141,7 @@ def _memory_record(row: Mapping[str, Any]) -> MemoryRecord:
             content=str(row["content"]),
             source=str(row["source"]),
             embedding=[],
+            embedding_provider=str(row["embedding_provider"]),
             embedding_model=str(row["embedding_model"]),
             embedding_dimension=int(row["embedding_dimension"]),
             embedding_metric=str(row["embedding_metric"]),
@@ -890,6 +1173,7 @@ def _memory_record(row: Mapping[str, Any]) -> MemoryRecord:
         or memory.usage_count < 0
         or memory.embedding_dimension < 1
         or memory.embedding_metric != "cosine"
+        or not memory.embedding_provider.strip()
         or not memory.embedding_model.strip()
         or not memory.embedding_version.strip()
     ):
@@ -902,6 +1186,31 @@ def _memory_record(row: Mapping[str, Any]) -> MemoryRecord:
     ):
         raise MemoryStoreContractError()
     return memory
+
+
+def _embedding_backfill_candidate(
+    row: Mapping[str, Any],
+) -> EmbeddingBackfillCandidate:
+    try:
+        candidate = EmbeddingBackfillCandidate(
+            id=str(row["id"]),
+            tenant_id=str(row["tenant_id"]),
+            user_id=str(row["user_id"]),
+            agent_id=str(row["agent_id"]),
+            content=str(row["content"]),
+            content_hash=str(row["content_hash"]),
+            updated_at=_datetime(row["updated_at"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        raise MemoryStoreContractError() from None
+    _require_identity(candidate.tenant_id, candidate.user_id, candidate.agent_id)
+    if (
+        not candidate.id.strip()
+        or not canonicalize_archival_content(candidate.content)
+        or candidate.content_hash != canonical_content_hash(candidate.content)
+    ):
+        raise MemoryStoreContractError()
+    return candidate
 
 
 def _classify_core_cas_miss(
@@ -1151,6 +1460,16 @@ _EXPECTED_CHECK_SIGNATURES = {
         "content_hash IS NOT NULL AND (content_hash::text = ''::text "
         "OR content_hash::text ~ '^[0-9a-f]{64}$'::text)"
     ),
+    "chk_long_term_memory_embedding_provider_nonblank": _expression_signature(
+        "btrim(embedding_provider::text) <> ''::text"
+    ),
+    "chk_long_term_memory_embedding_vector_identity": _expression_signature(
+        "embedding IS NULL OR (embedding_dimension = 1024 "
+        "AND embedding_metric::text = 'cosine'::text "
+        "AND btrim(embedding_provider::text) <> ''::text "
+        "AND btrim(embedding_model::text) <> ''::text "
+        "AND btrim(embedding_version::text) <> ''::text)"
+    ),
 }
 _CORE_BLOCK_KEY_SIGNATURE_VARIANTS = {
     _expression_signature(
@@ -1184,7 +1503,7 @@ _MEMORY_CHECKS = frozenset(
         "chk_long_term_memory_scope_env_nonblank",
         "chk_long_term_memory_tags_array",
     }
-)
+) | M_P1_REQUIRED_CHECKS
 _CORE_CHECKS = M_P2_REQUIRED_CHECKS - _MEMORY_CHECKS
 
 

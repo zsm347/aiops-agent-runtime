@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal, Protocol
 
+from superbiz_agent.memory.embedding import MemoryEmbeddingIdentity
 from superbiz_agent.memory.schemas import CoreMemoryBlock, LongTermMemory
 
 
@@ -18,6 +20,23 @@ class ExactMemoryWriteResult:
 class CoreContentWriteResult:
     status: Literal["updated", "unchanged", "conflict", "inactive", "read_only"]
     block: CoreMemoryBlock | None
+
+
+@dataclass(frozen=True)
+class VectorMemorySearchHit:
+    memory: LongTermMemory
+    similarity: float
+
+
+@dataclass(frozen=True)
+class EmbeddingBackfillCandidate:
+    id: str
+    tenant_id: str
+    user_id: str
+    agent_id: str
+    content: str
+    content_hash: str
+    updated_at: datetime
 
 
 class MemoryInspectionRepository(Protocol):
@@ -85,6 +104,22 @@ class MemoryRepository(MemoryInspectionRepository, Protocol):
         tags: list[str] | None = None,
     ) -> list[LongTermMemory]: ...
 
+    async def search_active_memories_by_vector(
+        self,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+        query_embedding: Sequence[float],
+        embedding_identity: MemoryEmbeddingIdentity,
+        *,
+        types: list[str],
+        scope_service: str | None = None,
+        scope_env: str | None = None,
+        tags: list[str] | None = None,
+        min_similarity: float,
+        limit: int,
+    ) -> list[VectorMemorySearchHit]: ...
+
     async def mark_returned(
         self,
         tenant_id: str,
@@ -105,3 +140,25 @@ class MemoryFixtureAdmin(Protocol):
     async def upsert_core_block(self, block: CoreMemoryBlock) -> CoreMemoryBlock: ...
 
     async def insert_memory(self, memory: LongTermMemory) -> LongTermMemory: ...
+
+
+class MemoryEmbeddingBackfillRepository(Protocol):
+    async def count_embedding_backfill_candidates(
+        self,
+        embedding_identity: MemoryEmbeddingIdentity,
+    ) -> int: ...
+
+    async def list_embedding_backfill_candidates(
+        self,
+        embedding_identity: MemoryEmbeddingIdentity,
+        *,
+        after_id: str | None,
+        limit: int,
+    ) -> list[EmbeddingBackfillCandidate]: ...
+
+    async def apply_embedding_backfill(
+        self,
+        candidate: EmbeddingBackfillCandidate,
+        embedding: Sequence[float],
+        embedding_identity: MemoryEmbeddingIdentity,
+    ) -> bool: ...

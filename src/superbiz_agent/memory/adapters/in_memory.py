@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
-from superbiz_agent.memory.ports import CoreContentWriteResult, ExactMemoryWriteResult
+from superbiz_agent.memory.embedding import (
+    DeterministicEmbeddingService,
+    MemoryEmbeddingIdentity,
+)
+from superbiz_agent.memory.errors import MemoryStoreContractError
+from superbiz_agent.memory.ports import (
+    CoreContentWriteResult,
+    ExactMemoryWriteResult,
+    VectorMemorySearchHit,
+)
 from superbiz_agent.memory.schemas import CoreMemoryBlock, LongTermMemory
 from superbiz_agent.memory.store import InMemoryMemoryStore
 
@@ -93,6 +102,51 @@ class InMemoryMemoryRepository:
             scope_env=scope_env,
             tags=tags,
         )
+
+    async def search_active_memories_by_vector(
+        self,
+        tenant_id: str,
+        user_id: str,
+        agent_id: str,
+        query_embedding: Sequence[float],
+        embedding_identity: MemoryEmbeddingIdentity,
+        *,
+        types: list[str],
+        scope_service: str | None = None,
+        scope_env: str | None = None,
+        tags: list[str] | None = None,
+        min_similarity: float,
+        limit: int,
+    ) -> list[VectorMemorySearchHit]:
+        if embedding_identity.provider != "local-deterministic":
+            raise MemoryStoreContractError()
+        memories = self.store.active_memories(
+            tenant_id,
+            user_id,
+            agent_id,
+            types=types,
+            scope_service=scope_service,
+            scope_env=scope_env,
+            tags=tags,
+        )
+        hits: list[VectorMemorySearchHit] = []
+        for memory in memories:
+            if (
+                memory.embedding_provider != embedding_identity.provider
+                or memory.embedding_model != embedding_identity.model
+                or memory.embedding_version != embedding_identity.version
+                or memory.embedding_dimension != embedding_identity.dimension
+                or len(memory.embedding) != embedding_identity.dimension
+            ):
+                continue
+            similarity = DeterministicEmbeddingService.cosine_similarity(
+                query_embedding,
+                memory.embedding,
+            )
+            if similarity >= min_similarity:
+                hits.append(VectorMemorySearchHit(memory=memory, similarity=similarity))
+        hits.sort(key=lambda hit: (-hit.similarity, hit.memory.id))
+        return hits[: max(0, limit)]
 
     async def list_memories_for_scope(
         self,

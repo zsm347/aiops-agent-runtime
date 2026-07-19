@@ -4,7 +4,8 @@ from collections import Counter
 import logging
 import math
 
-from superbiz_agent.memory.embedding import DeterministicEmbeddingService
+from superbiz_agent.memory.embedding import MemoryEmbeddingService
+from superbiz_agent.memory.errors import MemoryStoreContractError
 from superbiz_agent.memory.ports import MemoryRepository
 from superbiz_agent.memory.schemas import MemorySearchResult, MemoryTopicSummary
 from superbiz_agent.memory.store import confidence_label_for
@@ -18,7 +19,7 @@ class MemorySearchService:
     def __init__(
         self,
         repository: MemoryRepository,
-        embedding_service: DeterministicEmbeddingService,
+        embedding_service: MemoryEmbeddingService,
         *,
         top_k: int = 3,
         min_similarity: float = 0.5,
@@ -48,50 +49,50 @@ class MemorySearchService:
         types = searchable_types(optional_type)
         if not types:
             return []
-        query_embedding = self.embedding_service.embed(query)
-        memories = await self.repository.list_active_memories(
+        query_embedding = await self.embedding_service.embed_query(query)
+        threshold = self.min_similarity if min_similarity is None else min_similarity
+        hits = await self.repository.search_active_memories_by_vector(
             tenant_id,
             user_id,
             agent_id,
+            query_embedding.vector,
+            query_embedding.identity,
             types=types,
             scope_service=_blank_to_none(scope_service),
             scope_env=_blank_to_none(scope_env),
             tags=tags,
+            min_similarity=threshold,
+            limit=max(0, self.top_k),
         )
-        similarities = {}
-        for memory in memories:
-            embedding = memory.embedding
-            if (
-                len(embedding) != self.embedding_service.dimension
-                or any(not math.isfinite(value) for value in embedding)
-            ):
-                embedding = self.embedding_service.embed(memory.content)
-            similarities[memory.id] = self.embedding_service.cosine_similarity(
-                query_embedding,
-                embedding,
-            )
-        threshold = self.min_similarity if min_similarity is None else min_similarity
-        selected_memories = [
-            memory for memory in memories if similarities.get(memory.id, 0.0) >= threshold
-        ]
-        selected_memories.sort(key=lambda memory: (-similarities[memory.id], memory.id))
-        selected_memories = selected_memories[: max(0, self.top_k)]
+        _validate_hits(
+            hits,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            types=types,
+            scope_service=_blank_to_none(scope_service),
+            scope_env=_blank_to_none(scope_env),
+            tags=tags,
+            min_similarity=threshold,
+            limit=max(0, self.top_k),
+            embedding_identity=query_embedding.identity,
+        )
         results = [
             MemorySearchResult(
-                id=memory.id,
-                type=memory.type,
-                topic=memory.topic,
-                content=memory.content,
-                source=memory.source,
-                similarity=similarities[memory.id],
-                usage_count=memory.usage_count,
-                last_used_at=memory.last_used_at,
-                scope_service=memory.scope_service,
-                scope_env=memory.scope_env,
-                tags=list(memory.tags),
-                confidence_label=confidence_label_for(similarities[memory.id]),
+                id=hit.memory.id,
+                type=hit.memory.type,
+                topic=hit.memory.topic,
+                content=hit.memory.content,
+                source=hit.memory.source,
+                similarity=hit.similarity,
+                usage_count=hit.memory.usage_count,
+                last_used_at=hit.memory.last_used_at,
+                scope_service=hit.memory.scope_service,
+                scope_env=hit.memory.scope_env,
+                tags=list(hit.memory.tags),
+                confidence_label=confidence_label_for(hit.similarity),
             )
-            for memory in selected_memories
+            for hit in hits
         ]
         try:
             await self.repository.mark_returned(
@@ -146,3 +147,46 @@ def _blank_to_none(value: str | None) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _validate_hits(
+    hits,
+    *,
+    tenant_id: str,
+    user_id: str,
+    agent_id: str,
+    types: list[str],
+    scope_service: str | None,
+    scope_env: str | None,
+    tags: list[str] | None,
+    min_similarity: float,
+    limit: int,
+    embedding_identity,
+) -> None:
+    if len(hits) > limit:
+        raise MemoryStoreContractError()
+    tag_set = {tag for tag in (tags or []) if isinstance(tag, str) and tag}
+    previous: tuple[float, str] | None = None
+    for hit in hits:
+        memory = hit.memory
+        current = (-hit.similarity, memory.id)
+        if (
+            memory.tenant_id != tenant_id
+            or memory.user_id != user_id
+            or memory.agent_id != agent_id
+            or memory.status != "active"
+            or memory.type not in types
+            or (scope_service is not None and memory.scope_service != scope_service)
+            or (scope_env is not None and memory.scope_env != scope_env)
+            or (tag_set and not tag_set.intersection(memory.tags))
+            or memory.embedding_provider != embedding_identity.provider
+            or memory.embedding_model != embedding_identity.model
+            or memory.embedding_version != embedding_identity.version
+            or memory.embedding_dimension != embedding_identity.dimension
+            or memory.embedding_metric != "cosine"
+            or not math.isfinite(hit.similarity)
+            or hit.similarity < min_similarity
+            or (previous is not None and current < previous)
+        ):
+            raise MemoryStoreContractError()
+        previous = current

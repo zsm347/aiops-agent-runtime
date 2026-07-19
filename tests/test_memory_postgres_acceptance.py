@@ -72,7 +72,7 @@ pytestmark = pytest.mark.skipif(not DATABASE_URL, reason=PENDING_REASON)
 ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_DIR = ROOT / "alembic"
 PRE_M_P2_REVISION = "20260712_01"
-HEAD_REVISION = "20260714_01"
+HEAD_REVISION = "20260717_01"
 DESTRUCTIVE_CONFIRMATION_VALUE = "ERASE_M_P2_ISOLATED_TEST_DATABASE"
 DEDICATED_DATABASE_MARKER = "superbiz-agent:m-p2-destructive-test-database:v1"
 _DEFAULT_OR_PRODUCTION_DATABASE_NAMES = frozenset(

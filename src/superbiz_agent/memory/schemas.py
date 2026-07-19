@@ -90,6 +90,7 @@ class LongTermMemory:
     embedding: list[float]
     content_hash: str
     source: str = "realtime"
+    embedding_provider: str = "local-deterministic"
     embedding_model: str = "local-deterministic"
     embedding_dimension: int = 64
     embedding_metric: str = "cosine"

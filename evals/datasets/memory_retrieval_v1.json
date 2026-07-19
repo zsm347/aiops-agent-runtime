@@ -1,0 +1,195 @@
+{
+  "version": "1.0.1",
+  "split": "dev",
+  "fixtures": [
+    {
+      "fixture_id": "mpr1-fixture-orders-pool",
+      "evidence_id": "mpr1-evidence-orders-pool",
+      "identity": "primary",
+      "type": "experience",
+      "topic": "orders database pool",
+      "content": "The orders service exhausted its PostgreSQL connection pool after a traffic burst. Reducing connection hold time and raising the pool cap restored checkout throughput.",
+      "tags": ["database", "capacity"],
+      "scope_service": "orders-service",
+      "scope_env": "production"
+    },
+    {
+      "fixture_id": "mpr1-fixture-orders-cache",
+      "evidence_id": "mpr1-evidence-orders-cache",
+      "identity": "primary",
+      "type": "knowledge",
+      "topic": "orders cache invalidation",
+      "content": "Orders cache entries use event-driven invalidation. Delayed consumer offsets can leave stale order status visible until the invalidation event is processed.",
+      "tags": ["cache", "events"],
+      "scope_service": "orders-service",
+      "scope_env": "production"
+    },
+    {
+      "fixture_id": "mpr1-fixture-payments-timeout",
+      "evidence_id": "mpr1-evidence-payments-timeout",
+      "identity": "primary",
+      "type": "experience",
+      "topic": "payments gateway timeout",
+      "content": "Payment authorization timeouts were traced to an upstream gateway latency increase. The safe mitigation was a bounded timeout adjustment with retry budgets unchanged.",
+      "tags": ["payments", "latency"],
+      "scope_service": "payments-service",
+      "scope_env": "production"
+    },
+    {
+      "fixture_id": "mpr1-fixture-worker-disk",
+      "evidence_id": "mpr1-evidence-worker-disk",
+      "identity": "primary",
+      "type": "experience",
+      "topic": "worker disk pressure",
+      "content": "Batch workers filled ephemeral disk with retained temporary archives. Removing expired archives and enforcing retention recovered the worker fleet.",
+      "tags": ["storage", "batch"],
+      "scope_service": "batch-worker",
+      "scope_env": "staging"
+    },
+    {
+      "fixture_id": "mpr1-fixture-auth-rotation",
+      "evidence_id": "mpr1-evidence-auth-rotation",
+      "identity": "primary",
+      "type": "knowledge",
+      "topic": "authentication key rotation",
+      "content": "Authentication signing key rotation requires overlapping old and new public keys until all issued tokens using the previous key have expired.",
+      "tags": ["auth", "security"],
+      "scope_service": "auth-service",
+      "scope_env": "production"
+    },
+    {
+      "fixture_id": "mpr1-fixture-other-tenant",
+      "evidence_id": "mpr1-evidence-other-tenant",
+      "identity": "other_tenant",
+      "type": "experience",
+      "topic": "orders database pool private tenant",
+      "content": "A separate tenant resolved orders database pool saturation by changing its private proxy topology. This evidence must never cross tenant boundaries.",
+      "tags": ["database", "private"],
+      "scope_service": "orders-service",
+      "scope_env": "production"
+    },
+    {
+      "fixture_id": "mpr1-fixture-other-user",
+      "evidence_id": "mpr1-evidence-other-user",
+      "identity": "other_user",
+      "type": "experience",
+      "topic": "payments gateway private user",
+      "content": "Another user recorded a private payments gateway workaround. This evidence must never cross user boundaries.",
+      "tags": ["payments", "private"],
+      "scope_service": "payments-service",
+      "scope_env": "production"
+    },
+    {
+      "fixture_id": "mpr1-fixture-other-agent",
+      "evidence_id": "mpr1-evidence-other-agent",
+      "identity": "other_agent",
+      "type": "knowledge",
+      "topic": "authentication private agent",
+      "content": "Another agent owns a private authentication rotation note. This evidence must never cross agent boundaries.",
+      "tags": ["auth", "private"],
+      "scope_service": "auth-service",
+      "scope_env": "production"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "MPR01",
+      "category": "positive",
+      "identity": "primary",
+      "query": "orders service PostgreSQL connection pool exhaustion",
+      "relevant_evidence_ids": ["mpr1-evidence-orders-pool"]
+    },
+    {
+      "case_id": "MPR02",
+      "category": "paraphrase",
+      "identity": "primary",
+      "query": "checkout slowed down because database connections were all occupied",
+      "relevant_evidence_ids": ["mpr1-evidence-orders-pool"]
+    },
+    {
+      "case_id": "MPR03",
+      "category": "hard_negative",
+      "identity": "primary",
+      "query": "stale order state caused by delayed invalidation events",
+      "relevant_evidence_ids": ["mpr1-evidence-orders-cache"],
+      "forbidden_evidence_ids": ["mpr1-evidence-orders-pool"]
+    },
+    {
+      "case_id": "MPR04",
+      "category": "positive",
+      "identity": "primary",
+      "query": "upstream payment authorization latency and timeout mitigation",
+      "relevant_evidence_ids": ["mpr1-evidence-payments-timeout"]
+    },
+    {
+      "case_id": "MPR05",
+      "category": "scope_filter",
+      "identity": "primary",
+      "query": "production orders incident",
+      "relevant_evidence_ids": ["mpr1-evidence-orders-pool", "mpr1-evidence-orders-cache"],
+      "scope_service": "orders-service",
+      "scope_env": "production"
+    },
+    {
+      "case_id": "MPR06",
+      "category": "scope_filter",
+      "identity": "primary",
+      "query": "temporary archives exhausted worker storage",
+      "relevant_evidence_ids": ["mpr1-evidence-worker-disk"],
+      "scope_service": "batch-worker",
+      "scope_env": "staging",
+      "tags": ["storage"]
+    },
+    {
+      "case_id": "MPR07",
+      "category": "positive",
+      "identity": "primary",
+      "query": "overlap signing public keys during token key rotation",
+      "relevant_evidence_ids": ["mpr1-evidence-auth-rotation"],
+      "optional_type": "knowledge"
+    },
+    {
+      "case_id": "MPR08",
+      "category": "no_match",
+      "identity": "primary",
+      "query": "Kubernetes GPU scheduler topology for distributed training",
+      "relevant_evidence_ids": [],
+      "expected_empty": true
+    },
+    {
+      "case_id": "MPR09",
+      "category": "no_match",
+      "identity": "primary",
+      "query": "mobile application typography and color palette",
+      "relevant_evidence_ids": [],
+      "expected_empty": true
+    },
+    {
+      "case_id": "MPR10",
+      "category": "identity_isolation",
+      "identity": "primary",
+      "query": "private tenant orders database pool proxy topology",
+      "relevant_evidence_ids": [],
+      "forbidden_evidence_ids": ["mpr1-evidence-other-tenant"],
+      "expected_empty": true
+    },
+    {
+      "case_id": "MPR11",
+      "category": "identity_isolation",
+      "identity": "primary",
+      "query": "private user payment gateway workaround",
+      "relevant_evidence_ids": [],
+      "forbidden_evidence_ids": ["mpr1-evidence-other-user"],
+      "expected_empty": true
+    },
+    {
+      "case_id": "MPR12",
+      "category": "identity_isolation",
+      "identity": "primary",
+      "query": "private authentication rotation note",
+      "relevant_evidence_ids": [],
+      "forbidden_evidence_ids": ["mpr1-evidence-other-agent"],
+      "expected_empty": true
+    }
+  ]
+}

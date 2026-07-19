@@ -34,6 +34,76 @@
   隔离集群独立复跑：真实 PostgreSQL `39 passed / 0 skipped`、全量 stub
   `519 passed / 39 skipped`、基础 eval `14/14`，M-P2 独立验收通过。
 
+### M-P1 真实 Embedding 与 pgvector 检索
+
+状态：`implementation complete / pending independent acceptance`
+
+- 分支：`feat/m-p1-real-embedding-retrieval`。
+- PostgreSQL `16.14`、server pgvector `0.8.5`、Python pgvector `0.5.0`。
+- M-P1 真实 PostgreSQL gate：`7/7 passed, 0 skipped`；M-P2 回归 gate：`39/39 passed,
+  0 skipped`。
+- M-P1-R1 已撤回原 `topK=3/min_similarity=0.4` candidate：原 report 不含逐 case evidence，
+  isolation canary 被计入 ranking denominator，hard-negative forbidden hit 未作为硬门禁，且
+  latency 是 superset scan 口径。
+- Dataset `1.0.1` 将 MPR10-MPR12 修正为空结果 isolation contract，保留 tenant/user/agent
+  forbidden canary；SHA 从 `ba3e...21a88` 更新为 `007b...c3cbe`。
+- 新 evaluator 分离 semantic MPR01-07、no-match MPR08-09、isolation MPR10-12；report 新增
+  逐 case 脱敏 observations、scan config、硬 quality gate、Pareto frontier、候选实配复跑延迟
+  和 report SHA manifest。
+- production candidate 必须满足 no-match FPR=0、hard-negative forbidden=0、identity 与
+  isolation forbidden=0、三个 isolation case 全过；否则 `no_candidate`。生产默认 threshold
+  `0.5` 未修改。
+- 若 scan 完整但 candidate 实配复跑发生 database/Embedding/network error，report 必须为
+  `infrastructure_failed`、candidate 为 `candidate_not_evaluated`、ranking 为
+  `not_evaluated`、CLI 非零；不得伪装成质量 `no_candidate`。该状态机单测已覆盖。
+- 用户明确授权本次验收复用项目阿里云 key/base URL，并仅在验收进程内显式映射为独立
+  `MEMORY_EMBEDDING_*`；产品代码仍无 fallback，未读取/打印/修改 `.env`。唯一一次真实
+  `text-embedding-v4/1024` scan 为 12/12、0 skip、0 infrastructure failure。
+- 三轨真实结论：semantic/no-match/isolation observation 为 7/2/3；所有 topK=3 threshold 都未
+  通过硬 gate。0.0/0.2 有 no-match FPR=1 和 hard-negative，0.4/0.5 仍有 hard-negative，
+  0.6/0.7 分别只有 1/3、2/3 isolation empty case 通过。identity/forbidden leakage 始终为 0。
+- production candidate 为 `no_candidate`，selected config 和 candidate latency 均为 null；
+  生产默认 0.5 不变。
+- 脱敏 report SHA `e67f0fffadc9acfd441d22586456e1ff264d749067761fef29b21da981e8dc59`，
+  manifest SHA `aecc1ed4e00f9d06a7e3748a85a753846988e41b210a4afd80e11d835659e21b`，
+  Dataset SHA `007b2c17505784f53ab8937f19d243949a7899a7d6da256de62639d147ac3cbe`。
+- 本轮回归：retrieval/embedding/backfill `43 passed`、M-P1 PG `7/7`、M-P2 PG `39/39`、
+  全量 stub `564 passed / 46 skipped`；最终静态与冻结 hash 门禁见 M-P1 plan 第 15 节。
+- 冻结 prompt、Memory Dataset v1、Judge、Graph、OpenAI tool schema SHA-256 均未变化。
+- 下一步仅为技术负责人独立复核 report/manifest 与 no-candidate 结论；不要转 Ready、不要
+  合并、不要进入 M-P3，也不要根据该 12-case pilot 修改生产 threshold。
+
+详见 `docs/M-P1-real-embedding-retrieval-plan.md`。
+
+#### M-P1-R2 高质量检索 Dataset 与离线校准
+
+状态：`M-P1-R2 dev calibration executed / pending independent acceptance`
+
+- 新增独立 `memory_retrieval_v2` Dataset：60 条 fixture、48 条 dev query（30 semantic、10
+  no-match、8 identity isolation）和 12 条冻结 holdout；holdout 不进入 runner 或校准。
+- 新增 `src/superbiz_agent/evals/memory_retrieval_v2.py`，负责 schema、Dataset 质量分析、逐
+  case 脱敏 observation、top1 与 top1/top2 margin 的 observed-breakpoint 校准和 Pareto
+  frontier。不会选择或写入 production threshold。
+- 新增 v2 Dataset generator、quality runner、真实 PostgreSQL runner 及专项测试；报告只保存
+  query SHA、evidence ID、score、rank、latency 和哈希，不保存 query 原文、正文、身份或凭证。
+- 本机隔离 PostgreSQL 16.14 + pgvector 0.8.5 已完成专用数据库、comment、owner、空库和
+  Alembic head；真实 `text-embedding-v4/1024` 有效 run 为 48/48、0 skip、0 infrastructure
+  failure，按 adapter contract 计算 54 个 API request。没有打印、修改或写入凭证。
+- 第一次真实预检发现 S24/S29/S30 的 scope filter 会排除自身 qrel，原 Dataset SHA
+  `1fbd...b58925` 与原始报告保持不变并标记 invalid；新增 filter-reachability 质量门禁后，
+  只修正三处 scope metadata，有效 Dataset SHA 为
+  `14e4b025c56c909116cd5ea134ffb6cb957bedcf9454c6cda4264f94a566caac`。
+- 有效 superset 结果：semantic HitRate@1/@3 `1.0/1.0`、Recall@3/@5
+  `0.9833/0.9833`、MRR `1.0`、hard-negative forbidden `0`；identity leakage/forbidden
+  `0/0`。threshold=-1 的 no-match FPR=1 和 isolation empty=0 仅是 superset scan 口径。
+- calibration 为 `calibration_frontier_available`，4 个 Pareto 点；安全分离点为 dev 离线
+  可行性证据，不是 production candidate：answerable acceptance `0.90`、no-match FPR `0`、
+  isolation empty `1.0`、semantic Recall@3 `0.8833`。生产默认 `0.5` 未修改。
+- M-P1 `7/7`、M-P2 `39/39` 均为 0 skip。有效 run 清理后 fixture rows 为 0；三个一次性
+  数据库、测试角色均已删除，PostgreSQL 服务已停止。
+- 当前状态为 `M-P1-R2 dev calibration executed / pending independent acceptance`；没有
+  修改 v1、production threshold、Holdout、M-P3 或 RAG。
+
 ### M-R1 生产 prompt、tool 语义与 Core no-op
 
 实现状态：`implementation submitted / deterministic acceptance passed / real guardrails pending`

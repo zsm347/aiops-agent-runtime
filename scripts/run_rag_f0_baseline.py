@@ -34,7 +34,11 @@ from superbiz_agent.rag.chunking import RagDocumentChunker
 from superbiz_agent.rag.embedding import build_rag_embedding_service
 from superbiz_agent.rag.ingestion import RagIngestionError, RagIngestionService
 from superbiz_agent.rag.milvus_store import MilvusHybridChunkStore
-from superbiz_agent.rag.models import RagDocumentContentType, RagIngestionRequest
+from superbiz_agent.rag.models import (
+    RagDocumentContentType,
+    RagIngestionRequest,
+    RagRetrievalMode,
+)
 from superbiz_agent.rag.runtime import build_real_rag_retrieval_service
 
 
@@ -59,7 +63,7 @@ async def run(
     confirm_dedicated_postgres: bool,
     expected_database_name: str | None,
     expected_milvus_collection: str | None,
-    allow_model_gateway_embedding_credentials: bool = False,
+    retrieval_mode: RagRetrievalMode = RagRetrievalMode.HYBRID,
 ) -> int:
     dataset = load_rag_f0_dataset(dataset_path)
     settings = Settings()
@@ -68,17 +72,16 @@ async def run(
         confirmed=confirm_dedicated_postgres,
         expected_database_name=expected_database_name,
         expected_milvus_collection=expected_milvus_collection,
-        allow_model_gateway_embedding_credentials=allow_model_gateway_embedding_credentials,
     )
     if failure is not None:
-        write_rag_f0_report(infrastructure_pending_report(dataset, failure), output)
+        write_rag_f0_report(
+            infrastructure_pending_report(dataset, failure, retrieval_mode=retrieval_mode),
+            output,
+        )
         return 2
 
     assert expected_database_name is not None
     assert expected_milvus_collection is not None
-    use_model_gateway_credentials = allow_model_gateway_embedding_credentials and not (
-        settings.rag_embedding_api_key and settings.rag_embedding_base_url
-    )
     setting_overrides: dict[str, Any] = {
             "rag_enabled": True,
             "rag_fixture_mode": False,
@@ -87,11 +90,6 @@ async def run(
             "rag_rerank_enabled": False,
             "rag_embedding_batch_size": EMBEDDING_BATCH_SIZE,
     }
-    if use_model_gateway_credentials:
-        setting_overrides.update(
-            rag_embedding_api_key=settings.model_api_key,
-            rag_embedding_base_url=settings.model_base_url,
-        )
     eval_settings = settings.model_copy(update=setting_overrides)
     engine = create_engine(eval_settings.database_url)
     sessionmaker = create_sessionmaker(engine)
@@ -127,11 +125,7 @@ async def run(
             "version": embedding.version,
             "dimension": embedding.dimension,
             "batch_size": embedding.batch_size,
-            "credential_source": (
-                "model_gateway_authorized"
-                if use_model_gateway_credentials
-                else "rag_specific"
-            ),
+            "credential_source": "rag_specific",
         }
         store = MilvusHybridChunkStore(
             uri=eval_settings.rag_milvus_uri,
@@ -177,12 +171,16 @@ async def run(
         if failure_codes:
             raise RagF0SafetyError("resource_close_failed_before_retrieval")
 
-        runtime = build_real_rag_retrieval_service(eval_settings)
+        runtime = build_real_rag_retrieval_service(
+            eval_settings,
+            retrieval_mode=retrieval_mode,
+        )
         candidate_report = await RagF0Runner(
             retrieval_service=runtime,
             dataset=dataset,
             embedding_identity=embedding_identity,
             infrastructure_versions=infrastructure_versions,
+            retrieval_mode=retrieval_mode,
         ).run_dev()
     except Exception as exc:
         failure_codes.append(_failure_code(exc))
@@ -214,7 +212,10 @@ async def run(
         return 0 if candidate_report.status == "completed" else 2
 
     failure = ",".join(dict.fromkeys(failure_codes)) or "baseline_not_completed"
-    write_rag_f0_report(infrastructure_pending_report(dataset, failure), output)
+    write_rag_f0_report(
+        infrastructure_pending_report(dataset, failure, retrieval_mode=retrieval_mode),
+        output,
+    )
     return 2
 
 
@@ -224,7 +225,6 @@ def _static_preflight(
     confirmed: bool,
     expected_database_name: str | None,
     expected_milvus_collection: str | None,
-    allow_model_gateway_embedding_credentials: bool = False,
 ) -> str | None:
     if not confirmed:
         return "dedicated_postgres_not_confirmed"
@@ -252,13 +252,7 @@ def _static_preflight(
         return "rag_fixture_mode_true"
     if settings.rag_rerank_enabled:
         return "rerank_must_be_disabled"
-    rag_credentials_available = bool(
-        settings.rag_embedding_api_key and settings.rag_embedding_base_url
-    )
-    shared_credentials_available = bool(settings.model_api_key and settings.model_base_url)
-    if not rag_credentials_available and not (
-        allow_model_gateway_embedding_credentials and shared_credentials_available
-    ):
+    if not (settings.rag_embedding_api_key and settings.rag_embedding_base_url):
         return "rag_embedding_credentials_unavailable"
     provider = settings.rag_embedding_provider.casefold()
     if any(marker in provider for marker in ("deterministic", "fixture", "stub")):
@@ -414,7 +408,11 @@ def main() -> None:
     parser.add_argument("--confirm-dedicated-postgres", action="store_true")
     parser.add_argument("--expected-database-name")
     parser.add_argument("--expected-milvus-collection")
-    parser.add_argument("--allow-model-gateway-embedding-credentials", action="store_true")
+    parser.add_argument(
+        "--retrieval-mode",
+        choices=[mode.value for mode in RagRetrievalMode],
+        default=RagRetrievalMode.HYBRID.value,
+    )
     args = parser.parse_args()
     raise SystemExit(
         asyncio.run(
@@ -424,9 +422,7 @@ def main() -> None:
                 confirm_dedicated_postgres=args.confirm_dedicated_postgres,
                 expected_database_name=args.expected_database_name,
                 expected_milvus_collection=args.expected_milvus_collection,
-                allow_model_gateway_embedding_credentials=(
-                    args.allow_model_gateway_embedding_credentials
-                ),
+                retrieval_mode=RagRetrievalMode(args.retrieval_mode),
             )
         )
     )

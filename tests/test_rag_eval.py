@@ -9,6 +9,11 @@ from pathlib import Path
 import pytest
 
 import scripts.run_rag_f0_baseline as baseline_entrypoint
+from scripts.build_rag_f0_ablation_report import (
+    MODE_ORDER,
+    _paired_summary,
+    build_ablation_summary,
+)
 from scripts.run_rag_f0_baseline import (
     ALEMBIC_HEAD,
     RagF0SafetyError,
@@ -88,6 +93,28 @@ def test_real_baseline_manifest_matches_artifacts_and_report_contract(dataset) -
     assert manifest["execution"]["executed"] == 48
 
 
+def test_ablation_manifest_reports_and_summary_are_reproducible(dataset) -> None:
+    root = dataset.root.parents[2] / "artifacts" / "evals" / "rag_f0" / "ablation"
+    manifest = json.loads((root / "manifest.json").read_text("utf-8"))
+    for filename, expected_hash in manifest["artifacts"].items():
+        assert hashlib.sha256((root / filename).read_bytes()).hexdigest() == expected_hash
+    reports = {
+        mode: RagF0Report.model_validate_json(
+            (root / {"dense_only": "dense.json", "bm25_only": "bm25.json", "hybrid": "hybrid.json"}[mode.value]).read_text("utf-8")
+        )
+        for mode in MODE_ORDER
+    }
+    rebuilt = build_ablation_summary(reports)
+    committed = json.loads((root / "summary.json").read_text("utf-8"))
+    assert rebuilt == committed
+    assert all(report.execution["executed"] == 48 for report in reports.values())
+    assert committed["conclusion"] == {
+        "hybrid_has_observed_macro_gain_over_best_single": False,
+        "hybrid_has_strict_positive_paired_ci": False,
+        "selection_policy": "no parameter changes or reruns based on dev results",
+    }
+
+
 def test_dataset_hash_tampering_fails_closed(dataset, tmp_path: Path) -> None:
     copied = tmp_path / "rag_f0"
     shutil.copytree(dataset.root, copied)
@@ -157,6 +184,15 @@ def test_llamaindex_metrics_match_known_fixture_and_no_answer_rule() -> None:
     }
 
 
+def test_ablation_paired_bootstrap_is_deterministic_and_query_level() -> None:
+    first = _paired_summary([1.0, 0.0, -0.5, 0.5], samples=1000, seed=17)
+    second = _paired_summary([1.0, 0.0, -0.5, 0.5], samples=1000, seed=17)
+    assert first == second
+    assert first["value"] == 0.25
+    assert first["query_count"] == 4
+    assert first["ci95_low"] <= first["value"] <= first["ci95_high"]
+
+
 class _GoldRetrievalService:
     def __init__(self, dataset) -> None:
         self.dataset = dataset
@@ -223,7 +259,7 @@ async def test_runner_calls_service_with_backend_scope_and_is_reproducible(datas
     assert first.metrics["no_answer_false_positive_rate"].value == 0.0
     assert all(call.scope.tenant_id == RAG_F0_TENANT_ID for call in service.calls)
     assert all("knowledge_base_id" not in call.query for call in service.calls)
-    assert first.ablations["dense_only"].startswith("not_available")
+    assert first.ablations["dense_only"] == "not_executed_in_this_run"
     assert first.out_of_scope["inactive_documents"].startswith("out_of_scope")
 
 
@@ -378,7 +414,7 @@ def test_real_entrypoint_static_preflight_requires_exact_scoped_resources() -> N
     )
 
 
-def test_real_entrypoint_requires_explicit_model_gateway_credential_authorization() -> None:
+def test_real_entrypoint_rejects_model_gateway_only_credentials() -> None:
     settings = Settings(
         _env_file=None,
         database_url="postgresql+asyncpg://localhost/superbiz_rag_f0_dev",
@@ -397,14 +433,6 @@ def test_real_entrypoint_requires_explicit_model_gateway_credential_authorizatio
         "expected_milvus_collection": "rag_f0_dev",
     }
     assert _static_preflight(settings, **arguments) == "rag_embedding_credentials_unavailable"
-    assert (
-        _static_preflight(
-            settings,
-            **arguments,
-            allow_model_gateway_embedding_credentials=True,
-        )
-        is None
-    )
 
 
 def test_real_entrypoint_reports_sanitized_ingestion_failure_code() -> None:
@@ -676,7 +704,11 @@ async def test_real_entrypoint_cleanup_failure_withholds_completed_report(
     monkeypatch.setattr(baseline_entrypoint, "RagKnowledgeBaseRepository", KnowledgeBases)
     monkeypatch.setattr(baseline_entrypoint, "RagDocumentRepository", Documents)
     monkeypatch.setattr(baseline_entrypoint, "RagIngestionService", Ingestion)
-    monkeypatch.setattr(baseline_entrypoint, "build_real_rag_retrieval_service", lambda settings: Resource())
+    monkeypatch.setattr(
+        baseline_entrypoint,
+        "build_real_rag_retrieval_service",
+        lambda settings, **kwargs: Resource(),
+    )
     monkeypatch.setattr(baseline_entrypoint, "RagF0Runner", Runner)
     monkeypatch.setattr(baseline_entrypoint, "_cleanup_postgres", cleanup_failure)
     monkeypatch.setattr(baseline_entrypoint, "_drop_owned_collection", lambda **kwargs: None)

@@ -98,14 +98,15 @@ The entrypoint uses `Settings()` at runtime, does not inspect or print `.env`, a
 API keys. Missing credentials, disabled RAG, non-dedicated infrastructure, or unavailable services
 produce an `infrastructure_pending` artifact with no quality claims. Deterministic embeddings and
 fixtures are permitted only in unit tests, not in baseline artifacts.
-The real entrypoint uses RAG-specific embedding credentials by default and does not silently fall
-back to model-gateway settings. A run may reuse a complete model-gateway key/base-URL pair only when
-the operator explicitly supplies `--allow-model-gateway-embedding-credentials`; the report records
-that credential source without recording either value.
+The real entrypoint requires complete RAG-specific embedding credentials and does not map or fall
+back to model-gateway settings. Operators may inject approved values into `RAG_EMBEDDING_*` for an
+isolated process, but no Model Gateway mapping remains in project code or artifacts.
 
-Dense-only and BM25-only ablations are `not_available` in F0 because the current project service
-contract exposes only scope-preserving hybrid retrieval. F0 does not bypass the service or add a
-parallel Milvus query implementation to manufacture ablations.
+F0-Ablation exposes dense-only and native BM25-only through the same Milvus adapter and production
+retrieval service. Dense uses LlamaIndex `DEFAULT`, BM25 uses `SPARSE`, and Hybrid uses `HYBRID` with
+the frozen RRF ranker. All modes share structured tenant/KB filters, PostgreSQL active-document
+visibility, result scope validation, evidence mapping, and output contracts. BM25-only does not call
+query embedding; no direct Milvus bypass exists.
 
 ## Metrics
 

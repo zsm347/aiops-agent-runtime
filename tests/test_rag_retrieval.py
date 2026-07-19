@@ -9,13 +9,13 @@ from superbiz_agent.persistence.repositories.rag import (
     RagKnowledgeBaseContractError,
     RagPersistenceError,
 )
-from superbiz_agent.rag.embedding import RagQueryEmbedding
+from superbiz_agent.rag.embedding import RagEmbeddingIdentity, RagQueryEmbedding
 from superbiz_agent.rag.milvus_store import (
     MilvusStoreError,
     MilvusStoreIsolationError,
     RagHybridSearchHit,
 )
-from superbiz_agent.rag.models import RagRetrievalRequest, RagRetrievalScope
+from superbiz_agent.rag.models import RagRetrievalMode, RagRetrievalRequest, RagRetrievalScope
 from superbiz_agent.rag.retrieval import (
     MilvusRagRetrievalService,
     RagKnowledgeBaseNotConfiguredError,
@@ -128,6 +128,12 @@ class _ChunkStore:
             raise self.error
         return self.hits
 
+    async def search(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self.hits
+
 
 class _Documents:
     def __init__(self, statuses=None, error: Exception | None = None):
@@ -142,13 +148,21 @@ class _Documents:
         return dict(self.statuses)
 
 
-def _service(*, resolver=None, embedding=None, store=None, documents=None):
+def _service(
+    *,
+    resolver=None,
+    embedding=None,
+    store=None,
+    documents=None,
+    retrieval_mode=RagRetrievalMode.HYBRID,
+):
     return MilvusRagRetrievalService(
         settings=_settings(),
         knowledge_base_resolver=resolver or _Resolver(),
         document_repository=documents or _Documents(),
         embedding_service=embedding or _EmbeddingService(),
         chunk_store=store or _ChunkStore(),
+        retrieval_mode=retrieval_mode,
     )
 
 
@@ -197,6 +211,46 @@ async def test_retrieval_preserves_rrf_order_filters_active_and_builds_citations
         "document-b",
         "document-c",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [RagRetrievalMode.DENSE, RagRetrievalMode.BM25])
+async def test_single_route_preserves_scope_active_filter_and_mode(mode: RagRetrievalMode) -> None:
+    embedding = _EmbeddingService()
+    store = _ChunkStore(
+        (
+            _hit("chunk-a", "document-a", score=0.9),
+            _hit("chunk-b", "document-b", score=0.8),
+        )
+    )
+    service = _service(
+        embedding=embedding,
+        store=store,
+        documents=_Documents({"document-a": "active", "document-b": "archived"}),
+        retrieval_mode=mode,
+    )
+
+    result = await service.search(_request())
+
+    assert [chunk.id for chunk in result.chunks] == ["chunk-a"]
+    assert result.chunks[0].metadata["retrievalSource"] == mode.value
+    assert embedding.queries == ([] if mode is RagRetrievalMode.BM25 else ["中文订单告警"])
+    assert store.calls == [
+        {
+            "mode": mode,
+            "query_str": "中文订单告警",
+            "query_embedding": None if mode is RagRetrievalMode.BM25 else _embedding(),
+            "embedding_identity": RagEmbeddingIdentity(
+                provider="local-deterministic",
+                model="local-deterministic",
+                version="test-v1",
+                dimension=4,
+            ),
+            "tenant_id": "tenant-a",
+            "knowledge_base_id": "kb-a",
+            "similarity_top_k": 3,
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -195,6 +195,18 @@ def test_rag_chunk_config_and_embedding_version_are_validated() -> None:
         Settings(_env_file=None, rag_hybrid_top_k=1001)
 
 
+def test_embedding_factory_does_not_fall_back_to_model_gateway_credentials() -> None:
+    settings = Settings(
+        _env_file=None,
+        model_api_key="model-only-key",
+        model_base_url="https://model.invalid/v1",
+        rag_embedding_api_key=None,
+        rag_embedding_base_url=None,
+    )
+    with pytest.raises(ValueError, match="RAG-specific"):
+        build_rag_embedding_service(settings)
+
+
 def test_settings_repr_and_str_do_not_expose_embedding_credentials() -> None:
     secrets = {
         "model_api_key": "secret-model-fallback-7e934d",

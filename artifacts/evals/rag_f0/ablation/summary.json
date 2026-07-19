@@ -1,0 +1,1622 @@
+{
+  "acceptance": "pending_independent_quality_acceptance",
+  "bootstrap": {
+    "method": "paired_query_level_resampling_with_replacement",
+    "samples": 5000,
+    "seed": 20260718
+  },
+  "conclusion": {
+    "hybrid_has_observed_macro_gain_over_best_single": false,
+    "hybrid_has_strict_positive_paired_ci": false,
+    "selection_policy": "no parameter changes or reruns based on dev results"
+  },
+  "dataset_sha256": "0627e66b0b5b40cb1fbe326f2dfb980be2f43440d264056b5ebc774e157d26ec",
+  "execution": {
+    "bm25_only": {
+      "executed": 48,
+      "failed": 0,
+      "planned": 48,
+      "skipped": 0
+    },
+    "dense_only": {
+      "executed": 48,
+      "failed": 0,
+      "planned": 48,
+      "skipped": 0
+    },
+    "hybrid": {
+      "executed": 48,
+      "failed": 0,
+      "planned": 48,
+      "skipped": 0
+    }
+  },
+  "holdout": "not_run",
+  "latency_ms": {
+    "bm25_only": {
+      "p50": 21.458333532791585,
+      "p95": 22.830795956542715
+    },
+    "dense_only": {
+      "p50": 220.0328124454245,
+      "p95": 323.9264391246252
+    },
+    "hybrid": {
+      "p50": 245.02554145874456,
+      "p95": 533.187391440151
+    }
+  },
+  "metrics": {
+    "average_precision_at_10": {
+      "best_single_mode": "dense_only",
+      "bm25": 0.5362689393939394,
+      "dense": 0.7545454545454546,
+      "direction": "higher_is_better",
+      "hybrid": 0.7112283549783549,
+      "hybrid_gain_over_best_single": {
+        "ci95_high": 0.04453463203463204,
+        "ci95_low": -0.12873376623376623,
+        "query_count": 44,
+        "value": -0.043317099567099566
+      },
+      "query_count": 44
+    },
+    "binary_ndcg_at_10": {
+      "best_single_mode": "dense_only",
+      "bm25": 0.5840415283458156,
+      "dense": 0.8147866343539111,
+      "direction": "higher_is_better",
+      "hybrid": 0.7806283977509644,
+      "hybrid_gain_over_best_single": {
+        "ci95_high": 0.03276018539494032,
+        "ci95_low": -0.09855607523409522,
+        "query_count": 44,
+        "value": -0.03415823660294671
+      },
+      "query_count": 44
+    },
+    "binary_ndcg_at_3": {
+      "best_single_mode": "dense_only",
+      "bm25": 0.538217734006616,
+      "dense": 0.7761077071366125,
+      "direction": "higher_is_better",
+      "hybrid": 0.7341672973235169,
+      "hybrid_gain_over_best_single": {
+        "ci95_high": 0.044915476948049315,
+        "ci95_low": -0.13151506521806813,
+        "query_count": 44,
+        "value": -0.041940409813095596
+      },
+      "query_count": 44
+    },
+    "hit_rate_at_3": {
+      "best_single_mode": "dense_only",
+      "bm25": 0.6136363636363636,
+      "dense": 0.9090909090909091,
+      "direction": "higher_is_better",
+      "hybrid": 0.8863636363636364,
+      "hybrid_gain_over_best_single": {
+        "ci95_high": 0.045454545454545456,
+        "ci95_low": -0.09090909090909091,
+        "query_count": 44,
+        "value": -0.022727272727272728
+      },
+      "query_count": 44
+    },
+    "mrr_at_10": {
+      "best_single_mode": "dense_only",
+      "bm25": 0.5604166666666667,
+      "dense": 0.7678030303030302,
+      "direction": "higher_is_better",
+      "hybrid": 0.7233225108225109,
+      "hybrid_gain_over_best_single": {
+        "ci95_high": 0.0428030303030303,
+        "ci95_low": -0.1312229437229437,
+        "query_count": 44,
+        "value": -0.04448051948051948
+      },
+      "query_count": 44
+    },
+    "no_answer_false_positive_rate": {
+      "best_single_mode": "bm25_only",
+      "bm25": 0.75,
+      "dense": 1.0,
+      "direction": "lower_is_better",
+      "hybrid": 1.0,
+      "hybrid_gain_over_best_single": {
+        "ci95_high": 0.0,
+        "ci95_low": -0.75,
+        "query_count": 4,
+        "value": -0.25
+      },
+      "query_count": 4
+    },
+    "precision_at_3": {
+      "best_single_mode": "dense_only",
+      "bm25": 0.22727272727272727,
+      "dense": 0.32575757575757575,
+      "direction": "higher_is_better",
+      "hybrid": 0.3106060606060606,
+      "hybrid_gain_over_best_single": {
+        "ci95_high": 0.022727272727272728,
+        "ci95_low": -0.053030303030303025,
+        "query_count": 44,
+        "value": -0.01515151515151515
+      },
+      "query_count": 44
+    },
+    "recall_at_10": {
+      "best_single_mode": "dense_only",
+      "bm25": 0.7045454545454546,
+      "dense": 0.9772727272727273,
+      "direction": "higher_is_better",
+      "hybrid": 0.9772727272727273,
+      "hybrid_gain_over_best_single": {
+        "ci95_high": 0.0,
+        "ci95_low": 0.0,
+        "query_count": 44,
+        "value": 0.0
+      },
+      "query_count": 44
+    }
+  },
+  "no_answer_retrieved_counts": {
+    "bm25_only": {
+      "q-dev-045": 10,
+      "q-dev-046": 0,
+      "q-dev-047": 10,
+      "q-dev-048": 3
+    },
+    "dense_only": {
+      "q-dev-045": 10,
+      "q-dev-046": 10,
+      "q-dev-047": 10,
+      "q-dev-048": 10
+    },
+    "hybrid": {
+      "q-dev-045": 10,
+      "q-dev-046": 10,
+      "q-dev-047": 10,
+      "q-dev-048": 10
+    }
+  },
+  "query_deltas": {
+    "hit_rate_at_3": {
+      "hybrid_degraded_from_dense": [
+        "q-dev-015",
+        "q-dev-025"
+      ],
+      "hybrid_improved_over_dense": [
+        "q-dev-038"
+      ],
+      "tied": 41
+    },
+    "mrr_at_10": {
+      "hybrid_degraded_from_dense": [
+        "q-dev-003",
+        "q-dev-006",
+        "q-dev-012",
+        "q-dev-015",
+        "q-dev-017",
+        "q-dev-019",
+        "q-dev-020",
+        "q-dev-024",
+        "q-dev-025",
+        "q-dev-026",
+        "q-dev-028",
+        "q-dev-029",
+        "q-dev-030"
+      ],
+      "hybrid_improved_over_dense": [
+        "q-dev-009",
+        "q-dev-018",
+        "q-dev-038",
+        "q-dev-039",
+        "q-dev-040",
+        "q-dev-044"
+      ],
+      "tied": 25
+    },
+    "recall_at_10": {
+      "hybrid_degraded_from_dense": [],
+      "hybrid_improved_over_dense": [],
+      "tied": 44
+    }
+  },
+  "ranking_overlap": {
+    "bm25_only": {
+      "mean_top10_evidence_jaccard": 0.4546880203130203,
+      "query_count": 48
+    },
+    "dense_only": {
+      "mean_top10_evidence_jaccard": 0.6624035686535686,
+      "query_count": 48
+    }
+  },
+  "rerank": "disabled",
+  "score_comparability": "raw scores are mode-specific ranking values and are not compared across modes",
+  "slices": {
+    "alert_name": {
+      "average_precision_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.7833333333333333,
+          "ci95_low": 0.29333333333333333,
+          "query_count": 10,
+          "value": 0.5366666666666666
+        },
+        "dense_only": {
+          "ci95_high": 0.9,
+          "ci95_low": 0.5666666666666667,
+          "query_count": 10,
+          "value": 0.7333333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.8333333333333334,
+          "ci95_low": 0.4666666666666667,
+          "query_count": 10,
+          "value": 0.65
+        }
+      },
+      "binary_ndcg_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.8356207187108022,
+          "ci95_low": 0.4129912801577105,
+          "query_count": 10,
+          "value": 0.6243059994342564
+        },
+        "dense_only": {
+          "ci95_high": 0.9261859507142916,
+          "ci95_low": 0.6785578521428745,
+          "query_count": 10,
+          "value": 0.8023719014285831
+        },
+        "hybrid": {
+          "ci95_high": 0.8761859507142915,
+          "ci95_low": 0.602371901428583,
+          "query_count": 10,
+          "value": 0.7392789260714372
+        }
+      },
+      "binary_ndcg_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.8,
+          "ci95_low": 0.3,
+          "query_count": 10,
+          "value": 0.55
+        },
+        "dense_only": {
+          "ci95_high": 0.9261859507142916,
+          "ci95_low": 0.6892789260714373,
+          "query_count": 10,
+          "value": 0.8023719014285831
+        },
+        "hybrid": {
+          "ci95_high": 0.8761859507142915,
+          "ci95_low": 0.6130929753571458,
+          "query_count": 10,
+          "value": 0.7392789260714372
+        }
+      },
+      "hit_rate_at_3": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.4,
+          "query_count": 10,
+          "value": 0.7
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 10,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 10,
+          "value": 1.0
+        }
+      },
+      "mrr_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.7833333333333333,
+          "ci95_low": 0.3,
+          "query_count": 10,
+          "value": 0.5366666666666666
+        },
+        "dense_only": {
+          "ci95_high": 0.9,
+          "ci95_low": 0.5666666666666667,
+          "query_count": 10,
+          "value": 0.7333333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.8333333333333334,
+          "ci95_low": 0.4666666666666667,
+          "query_count": 10,
+          "value": 0.65
+        }
+      },
+      "precision_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.13333333333333333,
+          "query_count": 10,
+          "value": 0.2333333333333333
+        },
+        "dense_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.3333333333333333,
+          "query_count": 10,
+          "value": 0.3333333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.3333333333333333,
+          "query_count": 10,
+          "value": 0.3333333333333333
+        }
+      },
+      "recall_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7,
+          "query_count": 10,
+          "value": 0.9
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 10,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 10,
+          "value": 1.0
+        }
+      }
+    },
+    "command": {
+      "average_precision_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.78125,
+          "ci95_low": 0.1875,
+          "query_count": 8,
+          "value": 0.46875
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.6875,
+          "query_count": 8,
+          "value": 0.875
+        },
+        "hybrid": {
+          "ci95_high": 0.9553571428571428,
+          "ci95_low": 0.5357142857142857,
+          "query_count": 8,
+          "value": 0.7648809523809523
+        }
+      },
+      "binary_ndcg_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.8266433990956823,
+          "ci95_low": 0.2016433990956823,
+          "query_count": 8,
+          "value": 0.5054779688548564
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7711556236947785,
+          "query_count": 8,
+          "value": 0.9134864841764303
+        },
+        "hybrid": {
+          "ci95_high": 0.9771911987942431,
+          "ci95_low": 0.6458333333333334,
+          "query_count": 8,
+          "value": 0.8313578654609097
+        }
+      },
+      "binary_ndcg_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.7782867981913646,
+          "ci95_low": 0.125,
+          "query_count": 8,
+          "value": 0.4516433990956823
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.5766433990956823,
+          "query_count": 8,
+          "value": 0.8266433990956823
+        },
+        "hybrid": {
+          "ci95_high": 0.9516433990956823,
+          "ci95_low": 0.5,
+          "query_count": 8,
+          "value": 0.7641433990956823
+        }
+      },
+      "hit_rate_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.875,
+          "ci95_low": 0.125,
+          "query_count": 8,
+          "value": 0.5
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.625,
+          "query_count": 8,
+          "value": 0.875
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.625,
+          "query_count": 8,
+          "value": 0.875
+        }
+      },
+      "mrr_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.875,
+          "ci95_low": 0.1875,
+          "query_count": 8,
+          "value": 0.53125
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.71875,
+          "query_count": 8,
+          "value": 0.90625
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.5714285714285714,
+          "query_count": 8,
+          "value": 0.8095238095238095
+        }
+      },
+      "precision_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.29166666666666663,
+          "ci95_low": 0.041666666666666664,
+          "query_count": 8,
+          "value": 0.16666666666666666
+        },
+        "dense_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.20833333333333331,
+          "query_count": 8,
+          "value": 0.29166666666666663
+        },
+        "hybrid": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.20833333333333331,
+          "query_count": 8,
+          "value": 0.29166666666666663
+        }
+      },
+      "recall_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.875,
+          "ci95_low": 0.25,
+          "query_count": 8,
+          "value": 0.5625
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 8,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 8,
+          "value": 1.0
+        }
+      }
+    },
+    "configuration": {
+      "average_precision_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.6944444444444444,
+          "query_count": 9,
+          "value": 0.8981481481481483
+        },
+        "dense_only": {
+          "ci95_high": 0.9444444444444444,
+          "ci95_low": 0.5481481481481482,
+          "query_count": 9,
+          "value": 0.762962962962963
+        },
+        "hybrid": {
+          "ci95_high": 0.9444444444444444,
+          "ci95_low": 0.6555555555555556,
+          "query_count": 9,
+          "value": 0.8277777777777778
+        }
+      },
+      "binary_ndcg_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7394691456060547,
+          "query_count": 9,
+          "value": 0.913156381868685
+        },
+        "dense_only": {
+          "ci95_high": 0.9589921948412731,
+          "ci95_low": 0.6673262726088701,
+          "query_count": 9,
+          "value": 0.8263892611060207
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7524244504770562,
+          "query_count": 9,
+          "value": 0.8762122252385282
+        }
+      },
+      "binary_ndcg_at_3": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.6666666666666666,
+          "query_count": 9,
+          "value": 0.8888888888888888
+        },
+        "dense_only": {
+          "ci95_high": 0.9589921948412731,
+          "ci95_low": 0.5466356432386875,
+          "query_count": 9,
+          "value": 0.7834056158577384
+        },
+        "hybrid": {
+          "ci95_high": 0.9589921948412731,
+          "ci95_low": 0.6997138476394348,
+          "query_count": 9,
+          "value": 0.8498569238197174
+        }
+      },
+      "hit_rate_at_3": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.6666666666666666,
+          "query_count": 9,
+          "value": 0.8888888888888888
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.6666666666666666,
+          "query_count": 9,
+          "value": 0.8888888888888888
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 9,
+          "value": 1.0
+        }
+      },
+      "mrr_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7222222222222222,
+          "query_count": 9,
+          "value": 0.9074074074074073
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.5629629629629629,
+          "query_count": 9,
+          "value": 0.7814814814814814
+        },
+        "hybrid": {
+          "ci95_high": 0.9444444444444444,
+          "ci95_low": 0.6666666666666666,
+          "query_count": 9,
+          "value": 0.8333333333333334
+        }
+      },
+      "no_answer_false_positive_rate": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 1,
+          "value": 1.0
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 1,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 1,
+          "value": 1.0
+        }
+      },
+      "precision_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.2222222222222222,
+          "query_count": 9,
+          "value": 0.2962962962962963
+        },
+        "dense_only": {
+          "ci95_high": 0.4444444444444444,
+          "ci95_low": 0.2222222222222222,
+          "query_count": 9,
+          "value": 0.3333333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.3333333333333333,
+          "query_count": 9,
+          "value": 0.3333333333333333
+        }
+      },
+      "recall_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.8333333333333334,
+          "query_count": 9,
+          "value": 0.9444444444444444
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 9,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 9,
+          "value": 1.0
+        }
+      }
+    },
+    "error_code": {
+      "average_precision_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.625,
+          "query_count": 4,
+          "value": 0.875
+        },
+        "dense_only": {
+          "ci95_high": 0.875,
+          "ci95_low": 0.5,
+          "query_count": 4,
+          "value": 0.625
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        }
+      },
+      "binary_ndcg_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7231973151785931,
+          "query_count": 4,
+          "value": 0.9077324383928644
+        },
+        "dense_only": {
+          "ci95_high": 0.9077324383928644,
+          "ci95_low": 0.6309297535714575,
+          "query_count": 4,
+          "value": 0.7231973151785931
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        }
+      },
+      "binary_ndcg_at_3": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7231973151785931,
+          "query_count": 4,
+          "value": 0.9077324383928644
+        },
+        "dense_only": {
+          "ci95_high": 0.9077324383928644,
+          "ci95_low": 0.6309297535714575,
+          "query_count": 4,
+          "value": 0.7231973151785931
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        }
+      },
+      "hit_rate_at_3": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        }
+      },
+      "mrr_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.625,
+          "query_count": 4,
+          "value": 0.875
+        },
+        "dense_only": {
+          "ci95_high": 0.875,
+          "ci95_low": 0.5,
+          "query_count": 4,
+          "value": 0.625
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        }
+      },
+      "no_answer_false_positive_rate": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 1,
+          "value": 1.0
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 1,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 1,
+          "value": 1.0
+        }
+      },
+      "precision_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.3333333333333333,
+          "query_count": 4,
+          "value": 0.3333333333333333
+        },
+        "dense_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.3333333333333333,
+          "query_count": 4,
+          "value": 0.3333333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.3333333333333333,
+          "query_count": 4,
+          "value": 0.3333333333333333
+        }
+      },
+      "recall_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        }
+      }
+    },
+    "exact_keyword": {
+      "average_precision_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.7833333333333333,
+          "ci95_low": 0.30333333333333334,
+          "query_count": 10,
+          "value": 0.5366666666666666
+        },
+        "dense_only": {
+          "ci95_high": 0.9,
+          "ci95_low": 0.5666666666666667,
+          "query_count": 10,
+          "value": 0.7333333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.8333333333333334,
+          "ci95_low": 0.4666666666666667,
+          "query_count": 10,
+          "value": 0.65
+        }
+      },
+      "binary_ndcg_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.8356207187108022,
+          "ci95_low": 0.4129912801577105,
+          "query_count": 10,
+          "value": 0.6243059994342564
+        },
+        "dense_only": {
+          "ci95_high": 0.9261859507142916,
+          "ci95_low": 0.6785578521428745,
+          "query_count": 10,
+          "value": 0.8023719014285831
+        },
+        "hybrid": {
+          "ci95_high": 0.8761859507142915,
+          "ci95_low": 0.602371901428583,
+          "query_count": 10,
+          "value": 0.7392789260714372
+        }
+      },
+      "binary_ndcg_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.8,
+          "ci95_low": 0.3,
+          "query_count": 10,
+          "value": 0.55
+        },
+        "dense_only": {
+          "ci95_high": 0.9261859507142916,
+          "ci95_low": 0.6785578521428745,
+          "query_count": 10,
+          "value": 0.8023719014285831
+        },
+        "hybrid": {
+          "ci95_high": 0.8761859507142915,
+          "ci95_low": 0.602371901428583,
+          "query_count": 10,
+          "value": 0.7392789260714372
+        }
+      },
+      "hit_rate_at_3": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.4,
+          "query_count": 10,
+          "value": 0.7
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 10,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 10,
+          "value": 1.0
+        }
+      },
+      "mrr_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.7833333333333333,
+          "ci95_low": 0.3,
+          "query_count": 10,
+          "value": 0.5366666666666666
+        },
+        "dense_only": {
+          "ci95_high": 0.9,
+          "ci95_low": 0.5666666666666667,
+          "query_count": 10,
+          "value": 0.7333333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.8333333333333334,
+          "ci95_low": 0.4666666666666667,
+          "query_count": 10,
+          "value": 0.65
+        }
+      },
+      "precision_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.13333333333333333,
+          "query_count": 10,
+          "value": 0.2333333333333333
+        },
+        "dense_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.3333333333333333,
+          "query_count": 10,
+          "value": 0.3333333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.3333333333333333,
+          "query_count": 10,
+          "value": 0.3333333333333333
+        }
+      },
+      "recall_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7,
+          "query_count": 10,
+          "value": 0.9
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 10,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 10,
+          "value": 1.0
+        }
+      }
+    },
+    "hard_negative": {
+      "average_precision_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.7416666666666667,
+          "ci95_low": 0.37916666666666665,
+          "query_count": 20,
+          "value": 0.5614583333333333
+        },
+        "dense_only": {
+          "ci95_high": 0.8683333333333334,
+          "ci95_low": 0.5833333333333333,
+          "query_count": 20,
+          "value": 0.735
+        },
+        "hybrid": {
+          "ci95_high": 0.8854166666666666,
+          "ci95_low": 0.585,
+          "query_count": 20,
+          "value": 0.7404166666666667
+        }
+      },
+      "binary_ndcg_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.7811606311644851,
+          "ci95_low": 0.4193426403617271,
+          "query_count": 20,
+          "value": 0.6039694436225425
+        },
+        "dense_only": {
+          "ci95_high": 0.906717154285625,
+          "ci95_low": 0.659867100319222,
+          "query_count": 20,
+          "value": 0.7918710363791857
+        },
+        "hybrid": {
+          "ci95_high": 0.9077324383928644,
+          "ci95_low": 0.6551061228831382,
+          "query_count": 20,
+          "value": 0.7946531525727766
+        }
+      },
+      "binary_ndcg_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.7671069358997363,
+          "ci95_low": 0.38467132018086353,
+          "query_count": 20,
+          "value": 0.5727642955380092
+        },
+        "dense_only": {
+          "ci95_high": 0.8852649655288467,
+          "ci95_low": 0.5788533348351914,
+          "query_count": 20,
+          "value": 0.7415146305334279
+        },
+        "hybrid": {
+          "ci95_high": 0.9077324383928644,
+          "ci95_low": 0.619342640361727,
+          "query_count": 20,
+          "value": 0.7705285910760186
+        }
+      },
+      "hit_rate_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.85,
+          "ci95_low": 0.45,
+          "query_count": 20,
+          "value": 0.65
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7,
+          "query_count": 20,
+          "value": 0.85
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.75,
+          "query_count": 20,
+          "value": 0.9
+        }
+      },
+      "mrr_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.74375,
+          "ci95_low": 0.3770833333333333,
+          "query_count": 20,
+          "value": 0.5604166666666667
+        },
+        "dense_only": {
+          "ci95_high": 0.8833333333333334,
+          "ci95_low": 0.595,
+          "query_count": 20,
+          "value": 0.7433333333333334
+        },
+        "hybrid": {
+          "ci95_high": 0.8833333333333334,
+          "ci95_low": 0.5983333333333334,
+          "query_count": 20,
+          "value": 0.7466666666666667
+        }
+      },
+      "no_answer_false_positive_rate": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 2,
+          "value": 1.0
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 2,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 2,
+          "value": 1.0
+        }
+      },
+      "precision_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.31666666666666665,
+          "ci95_low": 0.15,
+          "query_count": 20,
+          "value": 0.2333333333333333
+        },
+        "dense_only": {
+          "ci95_high": 0.36666666666666664,
+          "ci95_low": 0.2333333333333333,
+          "query_count": 20,
+          "value": 0.3
+        },
+        "hybrid": {
+          "ci95_high": 0.36666666666666664,
+          "ci95_low": 0.26666666666666666,
+          "query_count": 20,
+          "value": 0.31666666666666665
+        }
+      },
+      "recall_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.9,
+          "ci95_low": 0.525,
+          "query_count": 20,
+          "value": 0.725
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.85,
+          "query_count": 20,
+          "value": 0.95
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.85,
+          "query_count": 20,
+          "value": 0.95
+        }
+      }
+    },
+    "multi_evidence": {
+      "average_precision_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.5333333333333333,
+          "ci95_low": 0.15416666666666667,
+          "query_count": 5,
+          "value": 0.3458333333333333
+        },
+        "dense_only": {
+          "ci95_high": 0.9166666666666666,
+          "ci95_low": 0.6333333333333333,
+          "query_count": 5,
+          "value": 0.7833333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.9285714285714285,
+          "ci95_low": 0.4585714285714285,
+          "query_count": 5,
+          "value": 0.6935714285714286
+        }
+      },
+      "binary_ndcg_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.6452588771061833,
+          "ci95_low": 0.282366768087087,
+          "query_count": 5,
+          "value": 0.4663109259167245
+        },
+        "dense_only": {
+          "ci95_high": 0.9593872208972474,
+          "ci95_low": 0.7584408735435545,
+          "query_count": 5,
+          "value": 0.8735155646883115
+        },
+        "hybrid": {
+          "ci95_high": 0.963505918070789,
+          "ci95_low": 0.6452378104130491,
+          "query_count": 5,
+          "value": 0.804371864241919
+        }
+      },
+      "binary_ndcg_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.6452588771061833,
+          "ci95_low": 0.12262943855309168,
+          "query_count": 5,
+          "value": 0.38394415782963753
+        },
+        "dense_only": {
+          "ci95_high": 0.9518324734889125,
+          "ci95_low": 0.5386852807234541,
+          "query_count": 5,
+          "value": 0.7678883156592751
+        },
+        "hybrid": {
+          "ci95_high": 0.9226294385530917,
+          "ci95_low": 0.432111684340725,
+          "query_count": 5,
+          "value": 0.6773705614469083
+        }
+      },
+      "hit_rate_at_3": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.2,
+          "query_count": 5,
+          "value": 0.6
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 5,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 5,
+          "value": 1.0
+        }
+      },
+      "mrr_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.9,
+          "ci95_low": 0.21666666666666665,
+          "query_count": 5,
+          "value": 0.5583333333333333
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7,
+          "query_count": 5,
+          "value": 0.9
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.6,
+          "query_count": 5,
+          "value": 0.8
+        }
+      },
+      "precision_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.7333333333333333,
+          "ci95_low": 0.06666666666666667,
+          "query_count": 5,
+          "value": 0.4
+        },
+        "dense_only": {
+          "ci95_high": 0.6666666666666666,
+          "ci95_low": 0.4,
+          "query_count": 5,
+          "value": 0.5333333333333333
+        },
+        "hybrid": {
+          "ci95_high": 0.6,
+          "ci95_low": 0.3333333333333333,
+          "query_count": 5,
+          "value": 0.4666666666666666
+        }
+      },
+      "recall_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.8,
+          "ci95_low": 0.5,
+          "query_count": 5,
+          "value": 0.6
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 5,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 5,
+          "value": 1.0
+        }
+      }
+    },
+    "no_answer": {
+      "no_answer_false_positive_rate": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.25,
+          "query_count": 4,
+          "value": 0.75
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 4,
+          "value": 1.0
+        }
+      }
+    },
+    "paraphrase": {
+      "average_precision_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.6,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.2
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.3,
+          "query_count": 5,
+          "value": 0.7
+        },
+        "hybrid": {
+          "ci95_high": 0.85,
+          "ci95_low": 0.11666666666666665,
+          "query_count": 5,
+          "value": 0.4833333333333333
+        }
+      },
+      "binary_ndcg_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.6,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.2
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.3261859507142915,
+          "query_count": 5,
+          "value": 0.7261859507142916
+        },
+        "hybrid": {
+          "ci95_high": 0.8861353116146786,
+          "ci95_low": 0.22861818645788748,
+          "query_count": 5,
+          "value": 0.5573767490362831
+        }
+      },
+      "binary_ndcg_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.6,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.2
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.3261859507142915,
+          "query_count": 5,
+          "value": 0.7261859507142916
+        },
+        "hybrid": {
+          "ci95_high": 0.8,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.4
+        }
+      },
+      "hit_rate_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.6,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.2
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.4,
+          "query_count": 5,
+          "value": 0.8
+        },
+        "hybrid": {
+          "ci95_high": 0.8,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.4
+        }
+      },
+      "mrr_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.6,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.2
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.3,
+          "query_count": 5,
+          "value": 0.7
+        },
+        "hybrid": {
+          "ci95_high": 0.85,
+          "ci95_low": 0.11666666666666665,
+          "query_count": 5,
+          "value": 0.4833333333333333
+        }
+      },
+      "precision_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.2,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.06666666666666667
+        },
+        "dense_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.13333333333333333,
+          "query_count": 5,
+          "value": 0.26666666666666666
+        },
+        "hybrid": {
+          "ci95_high": 0.26666666666666666,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.13333333333333333
+        }
+      },
+      "recall_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.6,
+          "ci95_low": 0.0,
+          "query_count": 5,
+          "value": 0.2
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.4,
+          "query_count": 5,
+          "value": 0.8
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.4,
+          "query_count": 5,
+          "value": 0.8
+        }
+      }
+    },
+    "symptom_only": {
+      "average_precision_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.78125,
+          "ci95_low": 0.15625,
+          "query_count": 8,
+          "value": 0.46875
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.6041666666666666,
+          "query_count": 8,
+          "value": 0.8333333333333334
+        },
+        "hybrid": {
+          "ci95_high": 0.9166666666666666,
+          "ci95_low": 0.43333333333333335,
+          "query_count": 8,
+          "value": 0.6791666666666667
+        }
+      },
+      "binary_ndcg_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.8115353587147804,
+          "ci95_low": 0.21156700815203852,
+          "query_count": 8,
+          "value": 0.5077007889556063
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.7124439143619405,
+          "query_count": 8,
+          "value": 0.873392117584935
+        },
+        "hybrid": {
+          "ci95_high": 0.9375,
+          "ci95_low": 0.5752310833652008,
+          "query_count": 8,
+          "value": 0.7563655416826004
+        }
+      },
+      "binary_ndcg_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.7827324383928644,
+          "ci95_low": 0.125,
+          "query_count": 8,
+          "value": 0.4538662191964322
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.5788662191964322,
+          "query_count": 8,
+          "value": 0.8288662191964322
+        },
+        "hybrid": {
+          "ci95_high": 0.9375,
+          "ci95_low": 0.4702324383928644,
+          "query_count": 8,
+          "value": 0.7202324383928644
+        }
+      },
+      "hit_rate_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.875,
+          "ci95_low": 0.125,
+          "query_count": 8,
+          "value": 0.5
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.625,
+          "query_count": 8,
+          "value": 0.875
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.625,
+          "query_count": 8,
+          "value": 0.875
+        }
+      },
+      "mrr_at_10": {
+        "bm25_only": {
+          "ci95_high": 0.78125,
+          "ci95_low": 0.1875,
+          "query_count": 8,
+          "value": 0.46875
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.625,
+          "query_count": 8,
+          "value": 0.8333333333333334
+        },
+        "hybrid": {
+          "ci95_high": 0.9166666666666666,
+          "ci95_low": 0.45,
+          "query_count": 8,
+          "value": 0.6791666666666667
+        }
+      },
+      "no_answer_false_positive_rate": {
+        "bm25_only": {
+          "ci95_high": 0.0,
+          "ci95_low": 0.0,
+          "query_count": 1,
+          "value": 0.0
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 1,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 1,
+          "value": 1.0
+        }
+      },
+      "precision_at_3": {
+        "bm25_only": {
+          "ci95_high": 0.29166666666666663,
+          "ci95_low": 0.041666666666666664,
+          "query_count": 8,
+          "value": 0.16666666666666666
+        },
+        "dense_only": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.20833333333333331,
+          "query_count": 8,
+          "value": 0.29166666666666663
+        },
+        "hybrid": {
+          "ci95_high": 0.3333333333333333,
+          "ci95_low": 0.20833333333333331,
+          "query_count": 8,
+          "value": 0.29166666666666663
+        }
+      },
+      "recall_at_10": {
+        "bm25_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 0.25,
+          "query_count": 8,
+          "value": 0.625
+        },
+        "dense_only": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 8,
+          "value": 1.0
+        },
+        "hybrid": {
+          "ci95_high": 1.0,
+          "ci95_low": 1.0,
+          "query_count": 8,
+          "value": 1.0
+        }
+      }
+    }
+  },
+  "split": "dev",
+  "status": "completed"
+}

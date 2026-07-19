@@ -28,7 +28,7 @@ from superbiz_agent.evals.rag_cases import (
     RagF0EvidenceMapper,
     RagF0Query,
 )
-from superbiz_agent.rag.models import RagRetrievalRequest, RagRetrievalScope
+from superbiz_agent.rag.models import RagRetrievalMode, RagRetrievalRequest, RagRetrievalScope
 from superbiz_agent.rag.retrieval import RagRetrievalService
 
 
@@ -68,7 +68,11 @@ class RagF0QueryResult(RagF0ReportModel):
 class RagF0Report(RagF0ReportModel):
     status: Literal["completed", "infrastructure_pending"]
     acceptance: Literal["pending_independent_dataset_acceptance"]
-    baseline: Literal["dense_native_bm25_rrf_k60_no_rerank"]
+    baseline: Literal[
+        "dense_only_no_rerank",
+        "bm25_only_no_rerank",
+        "dense_native_bm25_rrf_k60_no_rerank",
+    ]
     dataset_sha256: str
     dataset_version: str
     split: Literal["dev"]
@@ -99,6 +103,7 @@ class RagF0Runner:
         bootstrap_seed: int = 20260717,
         embedding_identity: Mapping[str, str | int] | None = None,
         infrastructure_versions: Mapping[str, str] | None = None,
+        retrieval_mode: RagRetrievalMode = RagRetrievalMode.HYBRID,
     ) -> None:
         if bootstrap_samples < 100:
             raise ValueError("bootstrap_samples must be at least 100")
@@ -109,6 +114,7 @@ class RagF0Runner:
         self._bootstrap_seed = bootstrap_seed
         self._embedding_identity = dict(embedding_identity or {})
         self._infrastructure_versions = dict(infrastructure_versions or {})
+        self._retrieval_mode = retrieval_mode
 
     async def run_dev(self) -> RagF0Report:
         started_at = _utc_now()
@@ -130,7 +136,7 @@ class RagF0Runner:
         return RagF0Report(
             status="completed" if infrastructure_failures == 0 else "infrastructure_pending",
             acceptance="pending_independent_dataset_acceptance",
-            baseline="dense_native_bm25_rrf_k60_no_rerank",
+            baseline=_baseline_name(self._retrieval_mode),
             dataset_sha256=self._dataset.manifest.dataset_sha256,
             dataset_version=self._dataset.manifest.dataset_version,
             split="dev",
@@ -158,6 +164,7 @@ class RagF0Runner:
                 "rrf_k": 60,
                 "rerank_enabled": False,
                 "top3_source": "prefix_of_same_top10_ranking",
+                "retrieval_mode": self._retrieval_mode.value,
             },
             dependency_versions={
                 "llama-index-core": version("llama-index-core"),
@@ -167,9 +174,13 @@ class RagF0Runner:
                 "openai": version("openai"),
             },
             ablations={
-                "hybrid": "executed" if infrastructure_failures == 0 else "infrastructure_pending",
-                "dense_only": "not_available: production RagRetrievalService exposes only the frozen hybrid path",
-                "bm25_only": "not_available: adapter has no scope-preserving service-level sparse-only contract",
+                mode.value: (
+                    "executed" if mode is self._retrieval_mode and infrastructure_failures == 0
+                    else "infrastructure_pending"
+                    if mode is self._retrieval_mode
+                    else "not_executed_in_this_run"
+                )
+                for mode in RagRetrievalMode
             },
             out_of_scope={
                 "tenant_isolation": "out_of_scope: retained in Batch D regression tests",
@@ -354,12 +365,17 @@ def write_rag_f0_report(report: RagF0Report, output: Path) -> None:
     )
 
 
-def infrastructure_pending_report(dataset: RagF0Dataset, failure: str) -> RagF0Report:
+def infrastructure_pending_report(
+    dataset: RagF0Dataset,
+    failure: str,
+    *,
+    retrieval_mode: RagRetrievalMode = RagRetrievalMode.HYBRID,
+) -> RagF0Report:
     now = _utc_now()
     return RagF0Report(
         status="infrastructure_pending",
         acceptance="pending_independent_dataset_acceptance",
-        baseline="dense_native_bm25_rrf_k60_no_rerank",
+        baseline=_baseline_name(retrieval_mode),
         dataset_sha256=dataset.manifest.dataset_sha256,
         dataset_version=dataset.manifest.dataset_version,
         split="dev",
@@ -377,6 +393,7 @@ def infrastructure_pending_report(dataset: RagF0Dataset, failure: str) -> RagF0R
             "default_final_top_k": 3,
             "rrf_k": 60,
             "rerank_enabled": False,
+            "retrieval_mode": retrieval_mode.value,
         },
         dependency_versions={
             package: version(package)
@@ -389,9 +406,12 @@ def infrastructure_pending_report(dataset: RagF0Dataset, failure: str) -> RagF0R
             )
         },
         ablations={
-            "hybrid": f"infrastructure_pending: {failure}",
-            "dense_only": "not_available",
-            "bm25_only": "not_available",
+            mode.value: (
+                f"infrastructure_pending: {failure}"
+                if mode is retrieval_mode
+                else "not_executed_in_this_run"
+            )
+            for mode in RagRetrievalMode
         },
         out_of_scope={
             "tenant_isolation": "out_of_scope",
@@ -407,3 +427,11 @@ def infrastructure_pending_report(dataset: RagF0Dataset, failure: str) -> RagF0R
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _baseline_name(mode: RagRetrievalMode) -> str:
+    return {
+        RagRetrievalMode.DENSE: "dense_only_no_rerank",
+        RagRetrievalMode.BM25: "bm25_only_no_rerank",
+        RagRetrievalMode.HYBRID: "dense_native_bm25_rrf_k60_no_rerank",
+    }[mode]

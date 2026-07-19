@@ -13,11 +13,17 @@ from superbiz_agent.persistence.repositories.rag import (
     RagPersistenceError,
 )
 from superbiz_agent.rag.embedding import (
+    RagEmbeddingIdentity,
     RagEmbeddingError,
     RagEmbeddingService,
     RagQueryEmbedding,
 )
-from superbiz_agent.rag.models import RagChunk, RagRetrievalRequest, RagRetrievalResult
+from superbiz_agent.rag.models import (
+    RagChunk,
+    RagRetrievalMode,
+    RagRetrievalRequest,
+    RagRetrievalResult,
+)
 from superbiz_agent.tools.fixtures import query_internal_docs_result
 
 if TYPE_CHECKING:
@@ -104,6 +110,8 @@ class DocumentStatusRepository(Protocol):
 class HybridChunkStore(Protocol):
     async def hybrid_search(self, **kwargs: object) -> Sequence["RagHybridSearchHit"]: ...
 
+    async def search(self, **kwargs: object) -> Sequence["RagHybridSearchHit"]: ...
+
 
 class RepositoryDefaultKnowledgeBaseResolver:
     def __init__(self, repository: RagKnowledgeBaseRepository) -> None:
@@ -141,12 +149,16 @@ class MilvusRagRetrievalService:
         document_repository: DocumentStatusRepository | RagDocumentRepository,
         embedding_service: RagEmbeddingService,
         chunk_store: HybridChunkStore,
+        retrieval_mode: RagRetrievalMode = RagRetrievalMode.HYBRID,
     ) -> None:
+        if not isinstance(retrieval_mode, RagRetrievalMode):
+            raise ValueError("retrieval_mode is invalid")
         self._settings = settings
         self._knowledge_bases = knowledge_base_resolver
         self._documents = document_repository
         self._embedding = embedding_service
         self._chunks = chunk_store
+        self._retrieval_mode = retrieval_mode
 
     async def search(self, request: RagRetrievalRequest) -> RagRetrievalResult:
         query = request.query
@@ -180,13 +192,21 @@ class MilvusRagRetrievalService:
         if not isinstance(knowledge_base_id, str) or not knowledge_base_id.strip():
             raise RagRetrievalContractError()
 
-        try:
-            query_embedding = await self._embedding.embed_query(query)
-        except RagEmbeddingError:
-            raise RagRetrievalContractError() from None
-        except Exception:
-            raise RagRetrievalUnavailableError() from None
-        self._validate_query_embedding(query_embedding)
+        embedding_identity = RagEmbeddingIdentity(
+            provider=self._settings.rag_embedding_provider,
+            model=self._settings.rag_embedding_model,
+            version=(self._settings.rag_embedding_version or self._settings.rag_embedding_model),
+            dimension=self._settings.rag_embedding_dimension,
+        )
+        query_embedding = None
+        if self._retrieval_mode is not RagRetrievalMode.BM25:
+            try:
+                query_embedding = await self._embedding.embed_query(query)
+            except RagEmbeddingError:
+                raise RagRetrievalContractError() from None
+            except Exception:
+                raise RagRetrievalUnavailableError() from None
+            self._validate_query_embedding(query_embedding)
 
         from superbiz_agent.rag.milvus_store import (
             MilvusStoreError,
@@ -195,13 +215,21 @@ class MilvusRagRetrievalService:
         )
 
         try:
-            hits = await self._chunks.hybrid_search(
-                query_str=query,
-                query_embedding=query_embedding,
-                tenant_id=tenant_id,
-                knowledge_base_id=knowledge_base_id,
-                similarity_top_k=self._settings.rag_hybrid_top_k,
-            )
+            search_arguments = {
+                "query_str": query,
+                "query_embedding": query_embedding,
+                "tenant_id": tenant_id,
+                "knowledge_base_id": knowledge_base_id,
+                "similarity_top_k": self._settings.rag_hybrid_top_k,
+            }
+            if self._retrieval_mode is RagRetrievalMode.HYBRID:
+                hits = await self._chunks.hybrid_search(**search_arguments)
+            else:
+                hits = await self._chunks.search(
+                    mode=self._retrieval_mode,
+                    embedding_identity=embedding_identity,
+                    **search_arguments,
+                )
         except MilvusStoreIsolationError:
             raise RagRetrievalIsolationError() from None
         except MilvusStoreError:
@@ -301,8 +329,7 @@ class MilvusRagRetrievalService:
                 raise RagRetrievalContractError()
             seen_ids.add(hit.chunk_id)
 
-    @staticmethod
-    def _to_rag_chunk(hit: "RagHybridSearchHit") -> RagChunk:
+    def _to_rag_chunk(self, hit: "RagHybridSearchHit") -> RagChunk:
         return RagChunk(
             id=hit.chunk_id,
             source=hit.document_name,
@@ -316,7 +343,7 @@ class MilvusRagRetrievalService:
                 "sectionTitle": hit.section_title,
                 "pageStart": hit.page_start,
                 "pageEnd": hit.page_end,
-                "retrievalSource": "hybrid",
+                "retrievalSource": self._retrieval_mode.value,
                 "confidence": "unavailable",
                 "evidenceType": "untrusted_retrieved_document",
             },

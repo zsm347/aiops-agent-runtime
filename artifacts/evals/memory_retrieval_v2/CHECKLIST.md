@@ -9,5 +9,5 @@
 - [ ] Generate redacted report, calibration report and Pareto frontier
 - [x] Pass M-P1 7-case and M-P2 39-case PostgreSQL gates
 - [x] Pass full regression and frozen-asset checks
-- [ ] Drop isolated database/role and stop service
+- [x] Drop isolated database/role and stop service after pending preflight
 - [ ] Commit and update Draft PR #3

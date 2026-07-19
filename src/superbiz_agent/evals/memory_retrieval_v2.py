@@ -120,6 +120,15 @@ class V2Dataset(V2Model):
                     for evidence_id in query.forbidden_evidence_ids
                 ):
                     raise ValueError("isolation canary does not match the declared identity axis")
+            for evidence_id in query.relevant_evidence_ids:
+                fixture = fixture_by_evidence[evidence_id]
+                if (
+                    (query.scope_service is not None and fixture.scope_service != query.scope_service)
+                    or (query.scope_env is not None and fixture.scope_env != query.scope_env)
+                    or (query.tags and not set(query.tags).intersection(fixture.tags))
+                    or (query.optional_type is not None and fixture.type != query.optional_type)
+                ):
+                    raise ValueError("qrel is unreachable under the query's production filters")
         dev = [q for q in self.queries if q.split == "dev"]
         holdout = [q for q in self.queries if q.split == "holdout"]
         if len(dev) != 48 or len(holdout) != 12:
@@ -278,6 +287,16 @@ def analyze_memory_retrieval_v2_quality(dataset: V2Dataset) -> dict[str, Any]:
         ),
         "all_qrels_have_rationale": all(set(q.relevant_evidence_ids) <= set(q.qrel_rationales) for q in queries),
         "all_hard_negatives_have_rationale": all(set(q.forbidden_evidence_ids) <= set(q.hard_negative_rationales) for q in queries),
+        "all_qrels_reachable_under_filters": all(
+            all(
+                (query.scope_service is None or evidence_by_id[evidence_id].scope_service == query.scope_service)
+                and (query.scope_env is None or evidence_by_id[evidence_id].scope_env == query.scope_env)
+                and (not query.tags or bool(set(query.tags).intersection(evidence_by_id[evidence_id].tags)))
+                and (query.optional_type is None or evidence_by_id[evidence_id].type == query.optional_type)
+                for evidence_id in query.relevant_evidence_ids
+            )
+            for query in queries
+        ),
         "cross_split_near_duplicates": nearest_pairs,
         "max_cross_split_jaccard": round(max_cross_split, 6),
         "query_gold_overlap_min": round(min(overlap), 6) if overlap else 0.0,
@@ -292,6 +311,16 @@ def analyze_memory_retrieval_v2_quality(dataset: V2Dataset) -> dict[str, Any]:
             and len({" ".join(sorted(_tokens(q.query))) for q in queries}) == len(queries)
             and all(set(q.relevant_evidence_ids) <= set(q.qrel_rationales) for q in queries)
             and all(set(q.forbidden_evidence_ids) <= set(q.hard_negative_rationales) for q in queries)
+            and all(
+                all(
+                    (query.scope_service is None or evidence_by_id[evidence_id].scope_service == query.scope_service)
+                    and (query.scope_env is None or evidence_by_id[evidence_id].scope_env == query.scope_env)
+                    and (not query.tags or bool(set(query.tags).intersection(evidence_by_id[evidence_id].tags)))
+                    and (query.optional_type is None or evidence_by_id[evidence_id].type == query.optional_type)
+                    for evidence_id in query.relevant_evidence_ids
+                )
+                for query in queries
+            )
             and len({canonical_content_hash(f.content) for f in dataset.fixtures})
             == len(dataset.fixtures)
         ),

@@ -4,11 +4,13 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from copy import deepcopy
 
 import pytest
 
 from superbiz_agent.evals.memory_retrieval_v2 import (
     V2Observation,
+    V2Dataset,
     V2ReturnedEvidence,
     analyze_memory_retrieval_v2_quality,
     calibrate_v2,
@@ -40,6 +42,16 @@ def test_v2_quality_report_is_explicitly_pending_acceptance() -> None:
     assert report["quality_gate"] is True
     assert report["track_counts"] == {"semantic_ranking": 30, "no_match": 10, "identity_isolation": 8}
     assert report["cross_split_near_duplicates"] == []
+    assert report["all_qrels_reachable_under_filters"] is True
+
+
+def test_v2_dataset_rejects_qrel_excluded_by_its_own_scope_filter() -> None:
+    dataset, _ = load_memory_retrieval_v2_dataset(DATASET, MANIFEST)
+    payload = deepcopy(dataset.model_dump())
+    semantic = next(query for query in payload["queries"] if query["track"] == "semantic_ranking")
+    semantic["scope_service"] = "unreachable-service"
+    with pytest.raises(ValueError, match="unreachable"):
+        V2Dataset.model_validate(payload)
 
 
 def test_v2_calibration_uses_observed_breakpoints_and_never_selects_production() -> None:

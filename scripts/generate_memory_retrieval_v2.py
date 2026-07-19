@@ -37,13 +37,13 @@ SEMANTIC = [
     ("S21", "paraphrase", "A partner responds with 429 after one API key exceeds a 120 requests-per-minute token bucket.", ["Partner API rate limit"], ["Gateway upstream timeout"], "partner-export", "production"),
     ("S22", "symptom_only", "A filesystem has free bytes but file creation fails because millions of tiny checkpoint files consumed all inodes.", ["Inode exhaustion"], ["Unrotated application logs"], "log-collector", "production"),
     ("S23", "exact_keyword", "Disk stays full after deleting a huge access log; lsof reports the proxy still has the deleted inode open.", ["Deleted open log file"], ["Temporary export files"], "legacy-proxy", "production"),
-    ("S24", "multi_evidence", "Report worker disks grow from failed exports and retention cleanup; the remedy must cover both finally deletion and a janitor.", ["Temporary export files", "Unrotated application logs"], [], "report-worker", "production"),
+    ("S24", "multi_evidence", "Report worker disks grow from failed exports and retention cleanup; the remedy must cover both finally deletion and a janitor.", ["Temporary export files", "Unrotated application logs"], [], None, "production"),
     ("S25", "paraphrase", "Ingress serves an expired certificate because the renewed secret is in a namespace the controller does not watch.", ["TLS certificate rotation"], ["Obsolete manual certificate copy"], "public-ingress", "production"),
     ("S26", "exact_keyword", "JWT rotation must publish old and new public keys until the longest token expires.", ["Signing key overlap"], ["Authentication clock skew"], "auth-service", "production"),
     ("S27", "hard_negative", "mTLS verification fails after renewal when the secret contains the leaf but omits the intermediate CA.", ["mTLS missing intermediate"], ["TLS certificate rotation"], "service-mesh", "production"),
     ("S28", "hard_negative", "Production requests are throttled by the CPU CFS quota while a staging workload shows high usage with no throttling.", ["CPU CFS throttling", "Staging CPU not throttled"], [], None, None),
-    ("S29", "symptom_only", "JVM pauses correlate with old-generation collection and not with a steadily growing heap leak.", ["JVM GC pause"], ["Heap memory leak"], "reporting-service", "production"),
-    ("S30", "paraphrase", "A worker retries the same malformed task forever; quarantine the poison item without reducing normal concurrency.", ["Worker poison task"], ["Batch database contention"], "document-worker", "production"),
+    ("S29", "symptom_only", "JVM pauses correlate with old-generation collection and not with a steadily growing heap leak.", ["JVM GC pause"], ["Heap memory leak"], "search-api", "production"),
+    ("S30", "paraphrase", "A worker retries the same malformed task forever; quarantine the poison item without reducing normal concurrency.", ["Worker poison task"], ["Batch database contention"], "thumbnail-worker", "production"),
 ]
 
 NO_MATCH = [
